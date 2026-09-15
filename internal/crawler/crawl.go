@@ -10,14 +10,17 @@ type crawlJob struct {
 	Depth int
 }
 
-func (i *Inspector) Crawl(ctx context.Context) (CrawlResult, error) {
-	result := CrawlResult{
+func (i *Inspector) Crawl(ctx context.Context) (result CrawlResult, err error) {
+	result = CrawlResult{
 		StartURL:     i.startURL.String(),
 		MaxDepth:     i.config.MaxDepth,
 		MaxPages:     i.config.MaxPages,
 		DepthByURL:   map[string]int{i.startURL.String(): 0},
 		SourcesByURL: make(map[string][]string),
 	}
+	defer func() {
+		result.Problems = collectProblems(result.Pages, result.SourcesByURL)
+	}()
 
 	frontier := []crawlJob{{URL: i.startURL, Depth: 0}}
 	visited := make(map[string]int)
@@ -46,13 +49,15 @@ func (i *Inspector) Crawl(ctx context.Context) (CrawlResult, error) {
 				continue
 			}
 
-			page, fetchErr := i.inspectURL(ctx, job.URL, job.Depth)
-			page.FetchError = fetchErr
+			page, inspectErr := i.inspectURL(ctx, job.URL, job.Depth)
 			pagePosition = len(result.Pages)
 			visited[currentURL] = pagePosition
 			result.Pages = append(result.Pages, page)
 			result.LinksDiscovered += page.LinksDiscovered
 			recordSources(&result, page, sourceSets)
+			if inspectErr != nil {
+				return result, inspectErr
+			}
 
 			if err := ctx.Err(); err != nil {
 				return result, err
@@ -102,6 +107,24 @@ func (i *Inspector) Crawl(ctx context.Context) (CrawlResult, error) {
 	}
 
 	return result, nil
+}
+
+func collectProblems(pages []PageResult, sourcesByURL map[string][]string) []Problem {
+	problems := make([]Problem, 0)
+	for _, page := range pages {
+		if !page.ResultKind.IsBroken() {
+			continue
+		}
+
+		problems = append(problems, Problem{
+			URL:     page.URL,
+			Kind:    page.ResultKind,
+			Status:  page.Status,
+			Error:   page.Error,
+			Sources: append([]string(nil), sourcesByURL[page.URL]...),
+		})
+	}
+	return problems
 }
 
 func recordSources(

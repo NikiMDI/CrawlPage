@@ -35,13 +35,13 @@ type PageResult struct {
 	URL             string
 	Depth           int
 	FetchDepth      int
-	StatusCode      int
+	ResultKind      ResultKind
 	Status          string
+	Error           string
 	ContentType     string
 	LinksDiscovered int
 	Links           []DiscoveredLink
 	Skipped         []SkippedLink
-	FetchError      error
 }
 
 type CrawlResult struct {
@@ -51,6 +51,7 @@ type CrawlResult struct {
 	Pages           []PageResult
 	DepthByURL      map[string]int
 	SourcesByURL    map[string][]string
+	Problems        []Problem
 	LinksDiscovered int
 	MaxPagesReached bool
 }
@@ -101,20 +102,27 @@ func (i *Inspector) inspectURL(ctx context.Context, target *url.URL, depth int) 
 		nil,
 	)
 	if err != nil {
-		return result, fmt.Errorf("create request: %w", err)
+		result.ResultKind = classifyRequestError(err)
+		result.Error = fmt.Sprintf("create request: %v", err)
+		return result, nil
 	}
 
 	response, err := i.client.Do(request)
 	if err != nil {
-		return result, fmt.Errorf("fetch %s: %w", target, err)
+		if parentErr := ctx.Err(); parentErr != nil {
+			return result, parentErr
+		}
+		result.ResultKind = classifyRequestError(err)
+		result.Error = err.Error()
+		return result, nil
 	}
 	defer response.Body.Close()
 
-	result.StatusCode = response.StatusCode
+	result.ResultKind = classifyHTTPStatus(response.StatusCode)
 	result.Status = response.Status
 	result.ContentType = response.Header.Get("Content-Type")
 
-	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+	if result.ResultKind != ResultSuccess {
 		return result, nil
 	}
 	if !isHTMLContentType(result.ContentType) {
@@ -123,7 +131,12 @@ func (i *Inspector) inspectURL(ctx context.Context, target *url.URL, depth int) 
 
 	body, err := io.ReadAll(response.Body)
 	if err != nil {
-		return result, fmt.Errorf("read %s: %w", target, err)
+		if parentErr := ctx.Err(); parentErr != nil {
+			return result, parentErr
+		}
+		result.ResultKind = classifyRequestError(err)
+		result.Error = fmt.Sprintf("read %s: %v", target, err)
+		return result, nil
 	}
 
 	hrefs, err := extractHrefs(bytes.NewReader(body))

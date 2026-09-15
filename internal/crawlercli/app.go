@@ -49,14 +49,12 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 
 func writeReport(output io.Writer, result crawler.CrawlResult) {
 	unique := make(map[string]struct{})
+	resultCounts := make(map[crawler.ResultKind]int)
 	internalCount := 0
 	externalCount := 0
 	skippedCount := 0
-	deepestDepth := 0
 	for _, page := range result.Pages {
-		if page.FetchDepth > deepestDepth {
-			deepestDepth = page.FetchDepth
-		}
+		resultCounts[page.ResultKind]++
 		skippedCount += len(page.Skipped)
 		for _, discovered := range page.Links {
 			unique[discovered.URL] = struct{}{}
@@ -69,7 +67,7 @@ func writeReport(output io.Writer, result crawler.CrawlResult) {
 		}
 	}
 
-	fmt.Fprintln(output, "Stage 2: sequential depth-first crawl")
+	fmt.Fprintln(output, "Stage 3: HTTP result classification")
 	fmt.Fprintln(output)
 	fmt.Fprintln(output, "Level 1 — summary")
 	fmt.Fprintf(output, "Start URL:          %s\n", result.StartURL)
@@ -77,15 +75,24 @@ func writeReport(output io.Writer, result crawler.CrawlResult) {
 	fmt.Fprintf(output, "Maximum pages:      %d\n", result.MaxPages)
 	fmt.Fprintf(output, "Max pages reached:  %t\n", result.MaxPagesReached)
 	fmt.Fprintf(output, "Pages checked:      %d\n", len(result.Pages))
-	fmt.Fprintf(output, "Deepest checked:    %d\n", deepestDepth)
 	fmt.Fprintf(output, "Links discovered:   %d\n", result.LinksDiscovered)
 	fmt.Fprintf(output, "Unique HTTP links:  %d\n", len(unique))
 	fmt.Fprintf(output, "Internal links:     %d\n", internalCount)
 	fmt.Fprintf(output, "External links:     %d\n", externalCount)
 	fmt.Fprintf(output, "Skipped links:      %d\n", skippedCount)
+	fmt.Fprintf(output, "Successful:         %d\n", resultCounts[crawler.ResultSuccess])
+	fmt.Fprintf(output, "Redirects:          %d\n", resultCounts[crawler.ResultRedirect])
+	fmt.Fprintf(output, "Broken links:       %d\n", len(result.Problems))
+	fmt.Fprintf(output, "HTTP 4xx:           %d\n", resultCounts[crawler.ResultHTTP4XX])
+	fmt.Fprintf(output, "HTTP 5xx:           %d\n", resultCounts[crawler.ResultHTTP5XX])
+	fmt.Fprintf(output, "Timeouts:           %d\n", resultCounts[crawler.ResultTimeout])
+	fmt.Fprintf(output, "Network errors:     %d\n", resultCounts[crawler.ResultNetworkError])
+	fmt.Fprintf(output, "Other HTTP statuses: %d\n", resultCounts[crawler.ResultOtherHTTPStatus])
 
 	fmt.Fprintln(output)
-	fmt.Fprintln(output, "Level 2 — DFS visit order")
+	fmt.Fprintln(output, "Level 2 — details")
+	fmt.Fprintln(output)
+	fmt.Fprintln(output, "DFS visit order")
 	if len(result.Pages) == 0 {
 		fmt.Fprintln(output, "No pages were checked.")
 		return
@@ -99,10 +106,12 @@ func writeReport(output io.Writer, result crawler.CrawlResult) {
 			fmt.Fprintf(output, "Fetched at depth: %d\n", page.FetchDepth)
 		}
 		fmt.Fprintf(output, "URL:    %s\n", page.URL)
-		if page.FetchError != nil {
-			fmt.Fprintf(output, "Result: REQUEST ERROR: %v\n", page.FetchError)
-		} else {
-			fmt.Fprintf(output, "Result: %s\n", page.Status)
+		fmt.Fprintf(output, "Result: %s\n", page.ResultKind)
+		if page.Status != "" {
+			fmt.Fprintf(output, "Status: %s\n", page.Status)
+		}
+		if page.Error != "" {
+			fmt.Fprintf(output, "Error:  %s\n", page.Error)
 		}
 
 		for _, discovered := range page.Links {
@@ -121,6 +130,34 @@ func writeReport(output io.Writer, result crawler.CrawlResult) {
 				skipped.RawHref,
 				strings.TrimSpace(skipped.Reason),
 			)
+		}
+	}
+
+	fmt.Fprintln(output)
+	fmt.Fprintln(output, "Broken link details")
+	if len(result.Problems) == 0 {
+		fmt.Fprintln(output, "No broken links were found.")
+		return
+	}
+
+	for problemIndex, problem := range result.Problems {
+		fmt.Fprintln(output)
+		fmt.Fprintf(output, "PROBLEM %d\n", problemIndex+1)
+		fmt.Fprintf(output, "URL:    %s\n", problem.URL)
+		fmt.Fprintf(output, "Result: %s\n", problem.Kind)
+		if problem.Status != "" {
+			fmt.Fprintf(output, "Status: %s\n", problem.Status)
+		}
+		if problem.Error != "" {
+			fmt.Fprintf(output, "Error:  %s\n", problem.Error)
+		}
+		fmt.Fprintln(output, "Found on:")
+		if len(problem.Sources) == 0 {
+			fmt.Fprintln(output, "- [start URL]")
+			continue
+		}
+		for _, source := range problem.Sources {
+			fmt.Fprintf(output, "- %s\n", source)
 		}
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -36,7 +37,7 @@ func TestCrawlUsesDFSAndKeepsAllSources(t *testing.T) {
 	var externalRequests atomic.Int32
 	externalServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		externalRequests.Add(1)
-		w.WriteHeader(http.StatusOK)
+		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	defer externalServer.Close()
 
@@ -88,6 +89,9 @@ func TestCrawlUsesDFSAndKeepsAllSources(t *testing.T) {
 	}
 	if len(result.Pages) != len(wantOrder) {
 		t.Fatalf("pages checked = %d, want %d", len(result.Pages), len(wantOrder))
+	}
+	if len(result.Problems) != 0 {
+		t.Fatalf("unrequested external 500 must not become a problem: %+v", result.Problems)
 	}
 }
 
@@ -366,7 +370,7 @@ func TestCrawlContinuesAfterOneRequestTimesOut(t *testing.T) {
 	}))
 	defer server.Close()
 
-	inspector := newTestInspector(t, server.URL+"/", 2, 20, 30*time.Millisecond)
+	inspector := newTestInspector(t, server.URL+"/", 2, 20, 250*time.Millisecond)
 	result, err := inspector.Crawl(context.Background())
 	if err != nil {
 		t.Fatalf("Crawl must continue after a per-request timeout: %v", err)
@@ -377,8 +381,20 @@ func TestCrawlContinuesAfterOneRequestTimesOut(t *testing.T) {
 		t.Fatalf("request order = %v, want %v", got, wantOrder)
 	}
 	slowPage := findPage(t, result, server.URL+"/slow")
-	if !errors.Is(slowPage.FetchError, context.DeadlineExceeded) {
-		t.Fatalf("slow FetchError = %v, want context deadline exceeded", slowPage.FetchError)
+	if slowPage.ResultKind != crawler.ResultTimeout {
+		t.Fatalf("slow result = %s, want TIMEOUT", slowPage.ResultKind)
+	}
+	if slowPage.Status != "" {
+		t.Fatalf("slow status = %q, want no HTTP status", slowPage.Status)
+	}
+	if !strings.Contains(slowPage.Error, context.DeadlineExceeded.Error()) {
+		t.Fatalf("slow error = %q, want context deadline exceeded", slowPage.Error)
+	}
+	if fastPage := findPage(t, result, server.URL+"/fast"); fastPage.ResultKind != crawler.ResultSuccess {
+		t.Fatalf("fast result = %s, want SUCCESS", fastPage.ResultKind)
+	}
+	if len(result.Problems) != 1 || result.Problems[0].URL != server.URL+"/slow" {
+		t.Fatalf("problems = %+v, want only the slow URL", result.Problems)
 	}
 }
 
@@ -426,6 +442,9 @@ func TestCrawlStopsOnParentCancellation(t *testing.T) {
 	case response := <-completed:
 		if !errors.Is(response.err, context.Canceled) {
 			t.Fatalf("Crawl error = %v, want context canceled", response.err)
+		}
+		if len(response.result.Problems) != 0 {
+			t.Fatalf("parent cancellation must not create a broken-link problem: %+v", response.result.Problems)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("Crawl did not stop after cancellation")

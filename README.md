@@ -28,9 +28,14 @@ go run ./cmd/graphsite
 go run ./cmd/graphsite -addr "127.0.0.1:9090" -slow-delay "7s"
 ```
 
-## Crawler: этап 2
+## Crawler: этап 3
 
-Второй этап выполняет последовательный DFS-обход внутреннего графа, ограниченный глубиной и количеством проверяемых URL:
+Третий этап выполняет последовательный DFS-обход и классифицирует результат проверки каждого внутреннего URL:
+
+```text
+SUCCESS, REDIRECT, HTTP_4XX, HTTP_5XX,
+TIMEOUT, NETWORK_ERROR, OTHER_HTTP_STATUS
+```
 
 ```powershell
 go run ./cmd/graphsite --slow-delay "100ms"
@@ -42,7 +47,7 @@ go run ./cmd/graphsite --slow-delay "100ms"
 go run ./cmd/crawler --url "http://127.0.0.1:8080/index.html" --depth 3 --max-pages 100 --timeout "2s"
 ```
 
-Используется явный LIFO-стек, `visited`, минимальная обнаруженная глубина и сохранение всех страниц-источников. Workers и ручная обработка redirect появятся на следующих этапах. Подробности находятся в [документации этапа 2](docs/crawler/stage-02.md).
+Используется явный LIFO-стек, `visited`, минимальная обнаруженная глубина и сохранение всех страниц-источников. Одна проблемная ссылка представлена одним `Problem`, содержащим все разные страницы-источники. Workers и ручная обработка redirect появятся на следующих этапах. Подробности находятся в [документации этапа 3](docs/crawler/stage-03.md).
 
 ## Правило внутренней ссылки
 
@@ -78,7 +83,7 @@ go test "-coverpkg=./internal/crawler,./internal/crawlercli" ./tests/...
 
 Все тесты находятся в отдельной папке `tests`. Они проверяют crawler через публичный API. Логика CLI вынесена в `internal/crawlercli`, поэтому её можно тестировать без запуска дочернего процесса.
 
-## Структура проекта после этапа 2
+## Структура проекта после этапа 3
 
 ```text
 graph-test-site-go/
@@ -101,6 +106,7 @@ graph-test-site-go/
 │   │   ├── pages.go
 │   │   └── render.go
 │   ├── crawler/
+│   │   ├── classify.go
 │   │   ├── config.go
 │   │   ├── crawl.go
 │   │   ├── inspect.go
@@ -114,10 +120,13 @@ graph-test-site-go/
 │   │   ├── crawl_test.go
 │   │   ├── graphsite_test.go
 │   │   ├── links_test.go
-│   │   └── normalize_test.go
+│   │   ├── normalize_test.go
+│   │   └── results_test.go
 │   └── crawlercli/
 │       └── run_test.go
-├── docs/crawler/stage-02.md
+├── docs/crawler/
+│   ├── stage-02.md
+│   └── stage-03.md
 ├── go.mod
 ├── go.sum
 └── README.md

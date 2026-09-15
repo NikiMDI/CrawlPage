@@ -151,7 +151,7 @@ func TestStartURLCanonicalizationThroughCrawlResult(t *testing.T) {
 	}
 }
 
-func TestStageTwoConfigValidation(t *testing.T) {
+func TestCrawlerConfigValidation(t *testing.T) {
 	tests := []crawler.Config{
 		{StartURL: "", RequestTimeout: 1, MaxDepth: 1, MaxPages: 1},
 		{StartURL: "/relative", RequestTimeout: 1, MaxDepth: 1, MaxPages: 1},

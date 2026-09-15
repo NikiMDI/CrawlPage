@@ -66,6 +66,35 @@ func TestCrawlCurrentGraphSiteAtDepthThree(t *testing.T) {
 		t.Fatal("MaxPagesReached = true, want false")
 	}
 
+	resultCounts := make(map[crawler.ResultKind]int)
+	for _, page := range result.Pages {
+		resultCounts[page.ResultKind]++
+	}
+	wantResultCounts := map[crawler.ResultKind]int{
+		crawler.ResultSuccess:      13,
+		crawler.ResultRedirect:     2,
+		crawler.ResultHTTP4XX:      1,
+		crawler.ResultHTTP5XX:      1,
+		crawler.ResultTimeout:      0,
+		crawler.ResultNetworkError: 0,
+	}
+	for kind, want := range wantResultCounts {
+		if got := resultCounts[kind]; got != want {
+			t.Errorf("%s pages = %d, want %d", kind, got, want)
+		}
+	}
+	if len(result.Problems) != 2 {
+		t.Fatalf("problems = %+v, want missing-page and server-error", result.Problems)
+	}
+	if result.Problems[0].URL != server.URL+"/missing-page.html" ||
+		result.Problems[0].Status != "404 Not Found" {
+		t.Errorf("first problem = %+v, want missing-page 404", result.Problems[0])
+	}
+	if result.Problems[1].URL != server.URL+"/server-error" ||
+		result.Problems[1].Status != "500 Internal Server Error" {
+		t.Errorf("second problem = %+v, want server-error 500", result.Problems[1])
+	}
+
 	internalLinks, externalLinks := linkKindCounts(result)
 	if internalLinks != 26 || externalLinks != 1 {
 		t.Fatalf(

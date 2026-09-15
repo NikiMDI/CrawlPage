@@ -33,11 +33,26 @@ type SkippedLink struct {
 
 type PageResult struct {
 	URL             string
+	Depth           int
+	FetchDepth      int
+	StatusCode      int
 	Status          string
 	ContentType     string
 	LinksDiscovered int
 	Links           []DiscoveredLink
 	Skipped         []SkippedLink
+	FetchError      error
+}
+
+type CrawlResult struct {
+	StartURL        string
+	MaxDepth        int
+	MaxPages        int
+	Pages           []PageResult
+	DepthByURL      map[string]int
+	SourcesByURL    map[string][]string
+	LinksDiscovered int
+	MaxPagesReached bool
 }
 
 type Inspector struct {
@@ -66,7 +81,15 @@ func New(config Config) (*Inspector, error) {
 }
 
 func (i *Inspector) InspectStart(ctx context.Context) (PageResult, error) {
-	result := PageResult{URL: i.startURL.String()}
+	return i.inspectURL(ctx, i.startURL, 0)
+}
+
+func (i *Inspector) inspectURL(ctx context.Context, target *url.URL, depth int) (PageResult, error) {
+	result := PageResult{
+		URL:        target.String(),
+		Depth:      depth,
+		FetchDepth: depth,
+	}
 
 	requestContext, cancel := context.WithTimeout(ctx, i.config.RequestTimeout)
 	defer cancel()
@@ -74,7 +97,7 @@ func (i *Inspector) InspectStart(ctx context.Context) (PageResult, error) {
 	request, err := http.NewRequestWithContext(
 		requestContext,
 		http.MethodGet,
-		i.startURL.String(),
+		target.String(),
 		nil,
 	)
 	if err != nil {
@@ -83,10 +106,11 @@ func (i *Inspector) InspectStart(ctx context.Context) (PageResult, error) {
 
 	response, err := i.client.Do(request)
 	if err != nil {
-		return result, fmt.Errorf("fetch %s: %w", i.startURL, err)
+		return result, fmt.Errorf("fetch %s: %w", target, err)
 	}
 	defer response.Body.Close()
 
+	result.StatusCode = response.StatusCode
 	result.Status = response.Status
 	result.ContentType = response.Header.Get("Content-Type")
 
@@ -99,17 +123,17 @@ func (i *Inspector) InspectStart(ctx context.Context) (PageResult, error) {
 
 	body, err := io.ReadAll(response.Body)
 	if err != nil {
-		return result, fmt.Errorf("read %s: %w", i.startURL, err)
+		return result, fmt.Errorf("read %s: %w", target, err)
 	}
 
 	hrefs, err := extractHrefs(bytes.NewReader(body))
 	if err != nil {
-		return result, fmt.Errorf("parse HTML from %s: %w", i.startURL, err)
+		return result, fmt.Errorf("parse HTML from %s: %w", target, err)
 	}
 	result.LinksDiscovered = len(hrefs)
 
 	for _, rawHref := range hrefs {
-		target, normalizeErr := normalizeURL(i.startURL, rawHref)
+		linkTarget, normalizeErr := normalizeURL(target, rawHref)
 		if normalizeErr != nil {
 			result.Skipped = append(result.Skipped, SkippedLink{
 				SourceURL: result.URL,
@@ -120,13 +144,13 @@ func (i *Inspector) InspectStart(ctx context.Context) (PageResult, error) {
 		}
 
 		kind := LinkExternal
-		if i.scope.contains(target) {
+		if i.scope.contains(linkTarget) {
 			kind = LinkInternal
 		}
 		result.Links = append(result.Links, DiscoveredLink{
 			SourceURL: result.URL,
 			RawHref:   rawHref,
-			URL:       target.String(),
+			URL:       linkTarget.String(),
 			Kind:      kind,
 		})
 	}

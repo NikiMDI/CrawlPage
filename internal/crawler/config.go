@@ -9,6 +9,8 @@ import (
 type Config struct {
 	StartURL       string
 	RequestTimeout time.Duration
+	MaxDepth       int
+	MaxPages       int
 }
 
 func (c Config) Validate() error {
@@ -19,6 +21,12 @@ func (c Config) Validate() error {
 func validateConfig(config Config) (*url.URL, error) {
 	if config.RequestTimeout <= 0 {
 		return nil, fmt.Errorf("request timeout must be positive")
+	}
+	if config.MaxDepth < 0 {
+		return nil, fmt.Errorf("maximum depth must be zero or greater")
+	}
+	if config.MaxPages <= 0 {
+		return nil, fmt.Errorf("maximum pages must be positive")
 	}
 
 	startURL, err := normalizeStartURL(config.StartURL)

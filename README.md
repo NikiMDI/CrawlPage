@@ -28,15 +28,21 @@ go run ./cmd/graphsite
 go run ./cmd/graphsite -addr "127.0.0.1:9090" -slow-delay "7s"
 ```
 
-## Crawler: этап 1
+## Crawler: этап 2
 
-Первый этап выполняет один запрос к стартовой странице, извлекает `<a href>`, нормализует адреса и разделяет их на внутренние и внешние:
+Второй этап выполняет последовательный DFS-обход внутреннего графа, ограниченный глубиной и количеством проверяемых URL:
 
 ```powershell
-go run ./cmd/crawler --url "http://127.0.0.1:8080/index.html" --timeout "2s"
+go run ./cmd/graphsite --slow-delay "100ms"
 ```
 
-На этом этапе намеренно ещё отсутствуют очередь, `visited`, обход по глубине и workers. Подробное объяснение и ожидаемый результат находятся в [документации этапа 1](docs/crawler/stage-01.md).
+В другом терминале:
+
+```powershell
+go run ./cmd/crawler --url "http://127.0.0.1:8080/index.html" --depth 3 --max-pages 100 --timeout "2s"
+```
+
+Используется явный LIFO-стек, `visited`, минимальная обнаруженная глубина и сохранение всех страниц-источников. Workers и ручная обработка redirect появятся на следующих этапах. Подробности находятся в [документации этапа 2](docs/crawler/stage-02.md).
 
 ## Правило внутренней ссылки
 
@@ -65,11 +71,14 @@ scheme + hostname + effective port
 go test ./...
 go vet ./...
 go test -race ./...
+go test "-coverpkg=./internal/crawler,./internal/crawlercli" ./tests/...
 ```
 
 Для `go test -race` на Windows требуется установленный C-компилятор, поскольку race detector использует CGO.
 
-## Структура проекта после этапа 1
+Все тесты находятся в отдельной папке `tests`. Они проверяют crawler через публичный API. Логика CLI вынесена в `internal/crawlercli`, поэтому её можно тестировать без запуска дочернего процесса.
+
+## Структура проекта после этапа 2
 
 ```text
 graph-test-site-go/
@@ -77,8 +86,7 @@ graph-test-site-go/
 │   ├── graphsite/
 │   │   └── main.go
 │   └── crawler/
-│       ├── main.go
-│       └── main_test.go
+│       └── main.go
 ├── internal/
 │   ├── site/
 │   │   ├── assets/
@@ -92,16 +100,24 @@ graph-test-site-go/
 │   │   ├── handler.go
 │   │   ├── pages.go
 │   │   └── render.go
-│   └── crawler/
-│       ├── config.go
-│       ├── inspect.go
-│       ├── inspect_test.go
-│       ├── links.go
-│       ├── links_test.go
-│       ├── normalize.go
-│       ├── normalize_test.go
-│       └── scope.go
-├── docs/crawler/stage-01.md
+│   ├── crawler/
+│   │   ├── config.go
+│   │   ├── crawl.go
+│   │   ├── inspect.go
+│   │   ├── links.go
+│   │   ├── normalize.go
+│   │   └── scope.go
+│   └── crawlercli/
+│       └── app.go
+├── tests/
+│   ├── crawler/
+│   │   ├── crawl_test.go
+│   │   ├── graphsite_test.go
+│   │   ├── links_test.go
+│   │   └── normalize_test.go
+│   └── crawlercli/
+│       └── run_test.go
+├── docs/crawler/stage-02.md
 ├── go.mod
 ├── go.sum
 └── README.md

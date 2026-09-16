@@ -11,14 +11,18 @@ type crawlJob struct {
 }
 
 func (i *Inspector) Crawl(ctx context.Context) (result CrawlResult, err error) {
+	session := newCrawlSession(i.config.MaxPages)
 	result = CrawlResult{
 		StartURL:     i.startURL.String(),
 		MaxDepth:     i.config.MaxDepth,
 		MaxPages:     i.config.MaxPages,
+		MaxRedirects: i.config.MaxRedirects,
 		DepthByURL:   map[string]int{i.startURL.String(): 0},
 		SourcesByURL: make(map[string][]string),
 	}
 	defer func() {
+		result.PagesChecked = session.pagesChecked
+		result.MaxPagesReached = session.maxPagesReached
 		result.Problems = collectProblems(result.Pages, result.SourcesByURL)
 	}()
 
@@ -26,6 +30,7 @@ func (i *Inspector) Crawl(ctx context.Context) (result CrawlResult, err error) {
 	visited := make(map[string]int)
 	expandedAt := make(map[string]int)
 	sourceSets := make(map[string]map[string]struct{})
+	countedLinkDocuments := make(map[string]struct{})
 
 	for len(frontier) > 0 {
 		if err := ctx.Err(); err != nil {
@@ -44,16 +49,26 @@ func (i *Inspector) Crawl(ctx context.Context) (result CrawlResult, err error) {
 
 		pagePosition, alreadyVisited := visited[currentURL]
 		if !alreadyVisited {
-			if len(result.Pages) >= i.config.MaxPages {
-				result.MaxPagesReached = true
+			page, pageChecked, inspectErr := i.inspectURL(
+				ctx,
+				job.URL,
+				job.Depth,
+				session,
+			)
+			if !pageChecked {
+				if inspectErr != nil {
+					return result, inspectErr
+				}
 				continue
 			}
 
-			page, inspectErr := i.inspectURL(ctx, job.URL, job.Depth)
 			pagePosition = len(result.Pages)
 			visited[currentURL] = pagePosition
 			result.Pages = append(result.Pages, page)
-			result.LinksDiscovered += page.LinksDiscovered
+			if _, counted := countedLinkDocuments[page.FinalURL]; page.HTMLParsed && !counted {
+				countedLinkDocuments[page.FinalURL] = struct{}{}
+				result.LinksDiscovered += page.LinksDiscovered
+			}
 			recordSources(&result, page, sourceSets)
 			if inspectErr != nil {
 				return result, inspectErr
@@ -66,13 +81,13 @@ func (i *Inspector) Crawl(ctx context.Context) (result CrawlResult, err error) {
 			result.Pages[pagePosition].Depth = job.Depth
 		}
 
+		page := result.Pages[pagePosition]
 		previousExpansionDepth, wasExpanded := expandedAt[currentURL]
 		if wasExpanded && previousExpansionDepth <= job.Depth {
 			continue
 		}
 		expandedAt[currentURL] = job.Depth
 
-		page := result.Pages[pagePosition]
 		children := make([]crawlJob, 0, len(page.Links))
 		for _, discovered := range page.Links {
 			if discovered.Kind != LinkInternal {

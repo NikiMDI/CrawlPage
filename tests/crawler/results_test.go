@@ -31,9 +31,11 @@ func TestCrawlClassifiesHTTPResults(t *testing.T) {
 		case "/empty":
 			w.WriteHeader(http.StatusNoContent)
 		case "/redirect":
-			w.Header().Set("Location", "/must-not-follow")
+			w.Header().Set("Location", "/redirect-final")
 			w.WriteHeader(http.StatusFound)
-			fmt.Fprint(w, `<a href="/redirect-body">not parsed yet</a>`)
+			fmt.Fprint(w, `<a href="/redirect-body">redirect body must not be parsed</a>`)
+		case "/redirect-final":
+			writeTestHTML(w)
 		case "/client-error":
 			w.Header().Set("Content-Type", "text/html")
 			w.WriteHeader(http.StatusNotFound)
@@ -64,7 +66,7 @@ func TestCrawlClassifiesHTTPResults(t *testing.T) {
 		{path: "/", kind: crawler.ResultSuccess, status: "200 OK"},
 		{path: "/ok", kind: crawler.ResultSuccess, status: "200 OK"},
 		{path: "/empty", kind: crawler.ResultSuccess, status: "204 No Content"},
-		{path: "/redirect", kind: crawler.ResultRedirect, status: "302 Found"},
+		{path: "/redirect", kind: crawler.ResultSuccess, status: "200 OK"},
 		{path: "/client-error", kind: crawler.ResultHTTP4XX, status: "404 Not Found"},
 		{path: "/server-error", kind: crawler.ResultHTTP5XX, status: "500 Internal Server Error"},
 		{path: "/other", kind: crawler.ResultOtherHTTPStatus, status: "600 status code 600"},
@@ -81,9 +83,19 @@ func TestCrawlClassifiesHTTPResults(t *testing.T) {
 			t.Errorf("%s error = %q, want empty for an HTTP response", test.path, page.Error)
 		}
 	}
+	redirectPage := findPage(t, result, server.URL+"/redirect")
+	if redirectPage.FinalURL != server.URL+"/redirect-final" {
+		t.Fatalf("redirect final URL = %q, want %q", redirectPage.FinalURL, server.URL+"/redirect-final")
+	}
+	if len(redirectPage.RedirectChain) != 1 ||
+		redirectPage.RedirectChain[0].Status != "302 Found" {
+		t.Fatalf("redirect chain = %+v, want one 302 hop", redirectPage.RedirectChain)
+	}
+	if countPath(requests.snapshot(), "/redirect-final") != 1 {
+		t.Fatalf("redirect final URL was not requested exactly once: %v", requests.snapshot())
+	}
 
 	for _, forbiddenPath := range []string{
-		"/must-not-follow",
 		"/redirect-body",
 		"/client-error-body",
 		"/server-error-body",
@@ -114,8 +126,9 @@ func TestHTTPStatusRangeBoundaries(t *testing.T) {
 		kind   crawler.ResultKind
 	}{
 		{status: 299, kind: crawler.ResultSuccess},
-		{status: 300, kind: crawler.ResultRedirect},
-		{status: 399, kind: crawler.ResultRedirect},
+		{status: 300, kind: crawler.ResultOtherHTTPStatus},
+		{status: 304, kind: crawler.ResultOtherHTTPStatus},
+		{status: 399, kind: crawler.ResultOtherHTTPStatus},
 		{status: 400, kind: crawler.ResultHTTP4XX},
 		{status: 499, kind: crawler.ResultHTTP4XX},
 		{status: 500, kind: crawler.ResultHTTP5XX},

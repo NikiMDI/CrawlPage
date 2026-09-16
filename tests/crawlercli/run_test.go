@@ -14,7 +14,7 @@ import (
 	"example.com/graph-test-site-go/internal/crawlercli"
 )
 
-func TestRunPrintsStageThreeDFSReport(t *testing.T) {
+func TestRunPrintsStageFourDFSReport(t *testing.T) {
 	var requestsMu sync.Mutex
 	var requests []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -55,9 +55,10 @@ func TestRunPrintsStageThreeDFSReport(t *testing.T) {
 		t.Fatalf("request order = %v, want DFS prefix %v", gotRequests, wantRequests)
 	}
 	for _, expected := range []string{
-		"Stage 3: HTTP result classification",
+		"Stage 4: redirect chains",
 		"Maximum depth:      2",
 		"Maximum pages:      2",
+		"Maximum redirects:  10",
 		"Max pages reached:  true",
 		"Pages checked:      2",
 		"Links discovered:   2",
@@ -75,7 +76,7 @@ func TestRunPrintsStageThreeDFSReport(t *testing.T) {
 	}
 }
 
-func TestRunRejectsInvalidStageThreeConfiguration(t *testing.T) {
+func TestRunRejectsInvalidStageFourConfiguration(t *testing.T) {
 	tests := []struct {
 		name string
 		args []string
@@ -84,6 +85,7 @@ func TestRunRejectsInvalidStageThreeConfiguration(t *testing.T) {
 		{name: "negative depth", args: []string{"--url", "http://example.com", "--depth", "-1"}},
 		{name: "zero pages", args: []string{"--url", "http://example.com", "--max-pages", "0"}},
 		{name: "zero timeout", args: []string{"--url", "http://example.com", "--timeout", "0s"}},
+		{name: "negative redirects", args: []string{"--url", "http://example.com", "--max-redirects", "-1"}},
 	}
 
 	for _, test := range tests {
@@ -147,8 +149,9 @@ func TestRunPrintsHTTPResultSummaryAndProblemSources(t *testing.T) {
 
 	for _, expected := range []string{
 		"Pages checked:      5",
-		"Successful:         2",
-		"Redirects:          1",
+		"Successful:         3",
+		"Redirect chains:    1",
+		"Redirect hops:      1",
 		"Broken links:       2",
 		"HTTP 4xx:           1",
 		"HTTP 5xx:           1",
@@ -157,6 +160,10 @@ func TestRunPrintsHTTPResultSummaryAndProblemSources(t *testing.T) {
 		"Result: HTTP_4XX\nStatus: 404 Not Found",
 		"Result: HTTP_5XX\nStatus: 500 Internal Server Error",
 		"Broken link details",
+		"REDIRECT 1",
+		server.URL + "/redirect — 302 Found -> " + server.URL + "/ok",
+		server.URL + "/ok — 200 OK",
+		"Final result: SUCCESS",
 		"Found on:\n- " + server.URL + "/",
 	} {
 		if !strings.Contains(stdout.String(), expected) {
@@ -241,5 +248,201 @@ func TestRunReportsActualFetchDepth(t *testing.T) {
 	targetPage := "Depth:  2\nFetched at depth: 3\nURL:    " + server.URL + "/target"
 	if !strings.Contains(stdout.String(), targetPage) {
 		t.Errorf("target page depths are not reported together:\n%s", stdout.String())
+	}
+}
+
+func TestRunPrintsRedirectCycleMarker(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/a":
+			w.Header().Set("Location", "/b")
+			w.WriteHeader(http.StatusFound)
+		case "/b":
+			w.Header().Set("Location", "/a")
+			w.WriteHeader(http.StatusFound)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := crawlercli.Run(
+		context.Background(),
+		[]string{
+			"--url", server.URL + "/a",
+			"--depth", "0",
+			"--max-pages", "2",
+			"--max-redirects", "10",
+			"--timeout", "1s",
+		},
+		&stdout,
+		&stderr,
+	)
+	if exitCode != 0 {
+		t.Fatalf("Run exit code = %d, stderr = %q", exitCode, stderr.String())
+	}
+
+	for _, expected := range []string{
+		"Redirect chains:    1",
+		"Redirect hops:      2",
+		"Redirect errors:    1",
+		"Broken links:       1",
+		server.URL + "/a — CYCLE (already requested in this chain)",
+		"Final result: REDIRECT_ERROR",
+	} {
+		if !strings.Contains(stdout.String(), expected) {
+			t.Errorf("report does not contain %q:\n%s", expected, stdout.String())
+		}
+	}
+}
+
+func TestRunCountsEveryUniqueRedirectURLAsChecked(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/r1":
+			w.Header().Set("Location", "/r2")
+			w.WriteHeader(http.StatusFound)
+		case "/r2":
+			w.Header().Set("Location", "/final")
+			w.WriteHeader(http.StatusMovedPermanently)
+		case "/final":
+			w.Header().Set("Content-Type", "text/html")
+			fmt.Fprint(w, `<h1>Final</h1>`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := crawlercli.Run(
+		context.Background(),
+		[]string{
+			"--url", server.URL + "/r1",
+			"--depth", "0",
+			"--max-pages", "3",
+			"--max-redirects", "10",
+			"--timeout", "1s",
+		},
+		&stdout,
+		&stderr,
+	)
+	if exitCode != 0 {
+		t.Fatalf("Run exit code = %d, stderr = %q", exitCode, stderr.String())
+	}
+
+	for _, expected := range []string{
+		"Max pages reached:  false",
+		"Pages checked:      3",
+		"Redirect chains:    1",
+		"Redirect hops:      2",
+		"Final result: SUCCESS",
+	} {
+		if !strings.Contains(stdout.String(), expected) {
+			t.Errorf("report does not contain %q:\n%s", expected, stdout.String())
+		}
+	}
+}
+
+func TestRunReportsPageLimitInsideRedirectChain(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/r1":
+			w.Header().Set("Location", "/r2")
+			w.WriteHeader(http.StatusFound)
+		case "/r2":
+			w.Header().Set("Location", "/final")
+			w.WriteHeader(http.StatusFound)
+		case "/final":
+			fmt.Fprint(w, `<h1>Must not be requested</h1>`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := crawlercli.Run(
+		context.Background(),
+		[]string{
+			"--url", server.URL + "/r1",
+			"--depth", "0",
+			"--max-pages", "2",
+			"--max-redirects", "10",
+			"--timeout", "1s",
+		},
+		&stdout,
+		&stderr,
+	)
+	if exitCode != 0 {
+		t.Fatalf("Run exit code = %d, stderr = %q", exitCode, stderr.String())
+	}
+
+	for _, expected := range []string{
+		"Max pages reached:  true",
+		"Pages checked:      2",
+		"Stopped by max-pages: 1",
+		"Broken links:       0",
+		"Result: PAGE_LIMIT",
+		server.URL + "/final — NOT REQUESTED (max-pages reached)",
+		"Final result: PAGE_LIMIT",
+	} {
+		if !strings.Contains(stdout.String(), expected) {
+			t.Errorf("report does not contain %q:\n%s", expected, stdout.String())
+		}
+	}
+}
+
+func TestRunCountsDirectTargetAfterUnfollowedRedirect(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		switch r.URL.Path {
+		case "/":
+			fmt.Fprint(w, `<a href="/old">Old</a><a href="/target">Target</a>`)
+		case "/old":
+			w.Header().Set("Location", "/target")
+			w.WriteHeader(http.StatusFound)
+		case "/target":
+			fmt.Fprint(w, `<a href="/leaf">Leaf</a>`)
+		case "/leaf":
+			fmt.Fprint(w, `<h1>Leaf</h1>`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := crawlercli.Run(
+		context.Background(),
+		[]string{
+			"--url", server.URL + "/",
+			"--depth", "2",
+			"--max-pages", "10",
+			"--max-redirects", "0",
+			"--timeout", "1s",
+		},
+		&stdout,
+		&stderr,
+	)
+	if exitCode != 0 {
+		t.Fatalf("Run exit code = %d, stderr = %q", exitCode, stderr.String())
+	}
+
+	for _, expected := range []string{
+		"Links discovered:   3",
+		"Unique HTTP links:  3",
+		"Internal links:     3",
+		"Redirect errors:    1",
+		"Broken links:       1",
+	} {
+		if !strings.Contains(stdout.String(), expected) {
+			t.Errorf("report does not contain %q:\n%s", expected, stdout.String())
+		}
 	}
 }

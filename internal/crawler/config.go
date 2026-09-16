@@ -11,6 +11,7 @@ type Config struct {
 	RequestTimeout time.Duration
 	MaxDepth       int
 	MaxPages       int
+	MaxRedirects   int
 }
 
 func (c Config) Validate() error {
@@ -27,6 +28,9 @@ func validateConfig(config Config) (*url.URL, error) {
 	}
 	if config.MaxPages <= 0 {
 		return nil, fmt.Errorf("maximum pages must be positive")
+	}
+	if config.MaxRedirects < 0 {
+		return nil, fmt.Errorf("maximum redirects must be zero or greater")
 	}
 
 	startURL, err := normalizeStartURL(config.StartURL)

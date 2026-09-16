@@ -135,6 +135,7 @@ func TestStartURLCanonicalizationThroughCrawlResult(t *testing.T) {
 		RequestTimeout: time.Second,
 		MaxDepth:       0,
 		MaxPages:       1,
+		MaxRedirects:   10,
 	})
 	if err != nil {
 		t.Fatalf("crawler.New: %v", err)
@@ -153,12 +154,13 @@ func TestStartURLCanonicalizationThroughCrawlResult(t *testing.T) {
 
 func TestCrawlerConfigValidation(t *testing.T) {
 	tests := []crawler.Config{
-		{StartURL: "", RequestTimeout: 1, MaxDepth: 1, MaxPages: 1},
-		{StartURL: "/relative", RequestTimeout: 1, MaxDepth: 1, MaxPages: 1},
-		{StartURL: "ftp://example.com", RequestTimeout: 1, MaxDepth: 1, MaxPages: 1},
-		{StartURL: "http://example.com", RequestTimeout: 0, MaxDepth: 1, MaxPages: 1},
-		{StartURL: "http://example.com", RequestTimeout: 1, MaxDepth: -1, MaxPages: 1},
-		{StartURL: "http://example.com", RequestTimeout: 1, MaxDepth: 1, MaxPages: 0},
+		{StartURL: "", RequestTimeout: 1, MaxDepth: 1, MaxPages: 1, MaxRedirects: 10},
+		{StartURL: "/relative", RequestTimeout: 1, MaxDepth: 1, MaxPages: 1, MaxRedirects: 10},
+		{StartURL: "ftp://example.com", RequestTimeout: 1, MaxDepth: 1, MaxPages: 1, MaxRedirects: 10},
+		{StartURL: "http://example.com", RequestTimeout: 0, MaxDepth: 1, MaxPages: 1, MaxRedirects: 10},
+		{StartURL: "http://example.com", RequestTimeout: 1, MaxDepth: -1, MaxPages: 1, MaxRedirects: 10},
+		{StartURL: "http://example.com", RequestTimeout: 1, MaxDepth: 1, MaxPages: 0, MaxRedirects: 10},
+		{StartURL: "http://example.com", RequestTimeout: 1, MaxDepth: 1, MaxPages: 1, MaxRedirects: -1},
 	}
 	for _, config := range tests {
 		if err := config.Validate(); err == nil {

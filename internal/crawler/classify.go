@@ -11,16 +11,18 @@ type ResultKind string
 const (
 	ResultSuccess         ResultKind = "SUCCESS"
 	ResultRedirect        ResultKind = "REDIRECT"
+	ResultRedirectError   ResultKind = "REDIRECT_ERROR"
 	ResultHTTP4XX         ResultKind = "HTTP_4XX"
 	ResultHTTP5XX         ResultKind = "HTTP_5XX"
 	ResultTimeout         ResultKind = "TIMEOUT"
 	ResultNetworkError    ResultKind = "NETWORK_ERROR"
 	ResultOtherHTTPStatus ResultKind = "OTHER_HTTP_STATUS"
+	ResultPageLimit       ResultKind = "PAGE_LIMIT"
 )
 
 func (kind ResultKind) IsBroken() bool {
 	switch kind {
-	case ResultHTTP4XX, ResultHTTP5XX, ResultTimeout, ResultNetworkError:
+	case ResultRedirectError, ResultHTTP4XX, ResultHTTP5XX, ResultTimeout, ResultNetworkError:
 		return true
 	default:
 		return false
@@ -39,7 +41,7 @@ func classifyHTTPStatus(statusCode int) ResultKind {
 	switch {
 	case statusCode >= 200 && statusCode <= 299:
 		return ResultSuccess
-	case statusCode >= 300 && statusCode <= 399:
+	case isRedirectStatus(statusCode):
 		return ResultRedirect
 	case statusCode >= 400 && statusCode <= 499:
 		return ResultHTTP4XX
@@ -47,6 +49,15 @@ func classifyHTTPStatus(statusCode int) ResultKind {
 		return ResultHTTP5XX
 	default:
 		return ResultOtherHTTPStatus
+	}
+}
+
+func isRedirectStatus(statusCode int) bool {
+	switch statusCode {
+	case 301, 302, 303, 307, 308:
+		return true
+	default:
+		return false
 	}
 }
 

@@ -1,10 +1,8 @@
 package crawler
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"mime"
 	"net/http"
 	"net/url"
@@ -31,23 +29,37 @@ type SkippedLink struct {
 	Reason    string
 }
 
+type RedirectHop struct {
+	URL       string
+	Status    string
+	TargetURL string
+}
+
 type PageResult struct {
-	URL             string
-	Depth           int
-	FetchDepth      int
-	ResultKind      ResultKind
-	Status          string
-	Error           string
-	ContentType     string
-	LinksDiscovered int
-	Links           []DiscoveredLink
-	Skipped         []SkippedLink
+	URL                    string
+	FinalURL               string
+	Depth                  int
+	FetchDepth             int
+	ResultKind             ResultKind
+	Status                 string
+	Error                  string
+	ContentType            string
+	HTMLParsed             bool
+	RedirectChain          []RedirectHop
+	RedirectedOutsideScope bool
+	RedirectCycleDetected  bool
+	StoppedByPageLimit     bool
+	LinksDiscovered        int
+	Links                  []DiscoveredLink
+	Skipped                []SkippedLink
 }
 
 type CrawlResult struct {
 	StartURL        string
 	MaxDepth        int
 	MaxPages        int
+	MaxRedirects    int
+	PagesChecked    int
 	Pages           []PageResult
 	DepthByURL      map[string]int
 	SourcesByURL    map[string][]string
@@ -57,10 +69,10 @@ type CrawlResult struct {
 }
 
 type Inspector struct {
-	config   Config
-	startURL *url.URL
-	scope    scope
-	client   *http.Client
+	config    Config
+	startURL  *url.URL
+	scope     scope
+	transport http.RoundTripper
 }
 
 func New(config Config) (*Inspector, error) {
@@ -70,105 +82,159 @@ func New(config Config) (*Inspector, error) {
 	}
 
 	return &Inspector{
-		config:   config,
-		startURL: startURL,
-		scope:    newScope(startURL),
-		client: &http.Client{
-			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
-				return http.ErrUseLastResponse
-			},
-		},
+		config:    config,
+		startURL:  startURL,
+		scope:     newScope(startURL),
+		transport: http.DefaultTransport,
 	}, nil
 }
 
 func (i *Inspector) InspectStart(ctx context.Context) (PageResult, error) {
-	return i.inspectURL(ctx, i.startURL, 0)
+	result, _, err := i.inspectURL(
+		ctx,
+		i.startURL,
+		0,
+		newCrawlSession(i.config.MaxPages),
+	)
+	return result, err
 }
 
-func (i *Inspector) inspectURL(ctx context.Context, target *url.URL, depth int) (PageResult, error) {
+func (i *Inspector) inspectURL(
+	ctx context.Context,
+	target *url.URL,
+	depth int,
+	session *crawlSession,
+) (PageResult, bool, error) {
 	result := PageResult{
 		URL:        target.String(),
+		FinalURL:   target.String(),
 		Depth:      depth,
 		FetchDepth: depth,
 	}
 
-	requestContext, cancel := context.WithTimeout(ctx, i.config.RequestTimeout)
-	defer cancel()
+	currentURL := target
+	redirectURLs := map[string]struct{}{target.String(): {}}
+	redirectsFollowed := 0
+	pageChecked := false
 
-	request, err := http.NewRequestWithContext(
-		requestContext,
-		http.MethodGet,
-		target.String(),
-		nil,
-	)
-	if err != nil {
-		result.ResultKind = classifyRequestError(err)
-		result.Error = fmt.Sprintf("create request: %v", err)
-		return result, nil
-	}
-
-	response, err := i.client.Do(request)
-	if err != nil {
-		if parentErr := ctx.Err(); parentErr != nil {
-			return result, parentErr
+	for {
+		result.FinalURL = currentURL.String()
+		fetched, available, fetchErr := session.fetch(ctx, i, currentURL)
+		if fetchErr != nil {
+			return result, pageChecked, fetchErr
 		}
-		result.ResultKind = classifyRequestError(err)
-		result.Error = err.Error()
-		return result, nil
-	}
-	defer response.Body.Close()
-
-	result.ResultKind = classifyHTTPStatus(response.StatusCode)
-	result.Status = response.Status
-	result.ContentType = response.Header.Get("Content-Type")
-
-	if result.ResultKind != ResultSuccess {
-		return result, nil
-	}
-	if !isHTMLContentType(result.ContentType) {
-		return result, nil
-	}
-
-	body, err := io.ReadAll(response.Body)
-	if err != nil {
-		if parentErr := ctx.Err(); parentErr != nil {
-			return result, parentErr
+		if !available {
+			result.ResultKind = ResultPageLimit
+			result.Status = ""
+			result.StoppedByPageLimit = true
+			return result, pageChecked, nil
 		}
-		result.ResultKind = classifyRequestError(err)
-		result.Error = fmt.Sprintf("read %s: %v", target, err)
-		return result, nil
-	}
+		pageChecked = true
 
-	hrefs, err := extractHrefs(bytes.NewReader(body))
-	if err != nil {
-		return result, fmt.Errorf("parse HTML from %s: %w", target, err)
-	}
-	result.LinksDiscovered = len(hrefs)
+		if fetched.ResultKind == ResultRedirect {
+			rawLocation := strings.TrimSpace(fetched.Location)
+			result.Status = fetched.Status
+			hop := RedirectHop{
+				URL:    currentURL.String(),
+				Status: fetched.Status,
+			}
 
-	for _, rawHref := range hrefs {
-		linkTarget, normalizeErr := normalizeURL(target, rawHref)
-		if normalizeErr != nil {
-			result.Skipped = append(result.Skipped, SkippedLink{
-				SourceURL: result.URL,
-				RawHref:   rawHref,
-				Reason:    normalizeErr.Error(),
-			})
+			if rawLocation == "" {
+				result.RedirectChain = append(result.RedirectChain, hop)
+				result.ResultKind = ResultRedirectError
+				result.Error = fmt.Sprintf(
+					"redirect response from %s has no Location header",
+					currentURL,
+				)
+				return result, pageChecked, nil
+			}
+
+			nextURL, normalizeErr := normalizeURL(currentURL, rawLocation)
+			if normalizeErr != nil {
+				hop.TargetURL = rawLocation
+				result.RedirectChain = append(result.RedirectChain, hop)
+				result.ResultKind = ResultRedirectError
+				result.Error = fmt.Sprintf(
+					"resolve redirect Location %q from %s: %v",
+					rawLocation,
+					currentURL,
+					normalizeErr,
+				)
+				return result, pageChecked, nil
+			}
+
+			hop.TargetURL = nextURL.String()
+			result.RedirectChain = append(result.RedirectChain, hop)
+			result.FinalURL = nextURL.String()
+
+			if !i.scope.contains(nextURL) {
+				result.ResultKind = ResultRedirect
+				result.RedirectedOutsideScope = true
+				return result, pageChecked, nil
+			}
+			if _, repeated := redirectURLs[nextURL.String()]; repeated {
+				result.ResultKind = ResultRedirectError
+				result.RedirectCycleDetected = true
+				result.Error = fmt.Sprintf(
+					"redirect cycle detected: %s already occurred in this chain",
+					nextURL,
+				)
+				return result, pageChecked, nil
+			}
+			if redirectsFollowed >= i.config.MaxRedirects {
+				result.ResultKind = ResultRedirectError
+				result.Error = fmt.Sprintf(
+					"maximum redirects exceeded: limit is %d; next URL is %s",
+					i.config.MaxRedirects,
+					nextURL,
+				)
+				return result, pageChecked, nil
+			}
+
+			redirectsFollowed++
+			redirectURLs[nextURL.String()] = struct{}{}
+			currentURL = nextURL
+			result.Status = ""
 			continue
 		}
 
-		kind := LinkExternal
-		if i.scope.contains(linkTarget) {
-			kind = LinkInternal
-		}
-		result.Links = append(result.Links, DiscoveredLink{
-			SourceURL: result.URL,
-			RawHref:   rawHref,
-			URL:       linkTarget.String(),
-			Kind:      kind,
-		})
-	}
+		result.FinalURL = currentURL.String()
+		result.ResultKind = fetched.ResultKind
+		result.Status = fetched.Status
+		result.Error = fetched.Error
+		result.ContentType = fetched.ContentType
 
-	return result, nil
+		if result.ResultKind != ResultSuccess || !isHTMLContentType(result.ContentType) {
+			return result, pageChecked, nil
+		}
+		result.HTMLParsed = true
+		result.LinksDiscovered = len(fetched.Hrefs)
+
+		for _, rawHref := range fetched.Hrefs {
+			linkTarget, normalizeErr := normalizeURL(currentURL, rawHref)
+			if normalizeErr != nil {
+				result.Skipped = append(result.Skipped, SkippedLink{
+					SourceURL: currentURL.String(),
+					RawHref:   rawHref,
+					Reason:    normalizeErr.Error(),
+				})
+				continue
+			}
+
+			kind := LinkExternal
+			if i.scope.contains(linkTarget) {
+				kind = LinkInternal
+			}
+			result.Links = append(result.Links, DiscoveredLink{
+				SourceURL: currentURL.String(),
+				RawHref:   rawHref,
+				URL:       linkTarget.String(),
+				Kind:      kind,
+			})
+		}
+
+		return result, pageChecked, nil
+	}
 }
 
 func isHTMLContentType(contentType string) bool {

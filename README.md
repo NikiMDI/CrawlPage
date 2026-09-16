@@ -28,13 +28,14 @@ go run ./cmd/graphsite
 go run ./cmd/graphsite -addr "127.0.0.1:9090" -slow-delay "7s"
 ```
 
-## Crawler: этап 3
+## Crawler: этап 4
 
-Третий этап выполняет последовательный DFS-обход и классифицирует результат проверки каждого внутреннего URL:
+Четвёртый этап выполняет последовательный DFS-обход, классифицирует конечный результат проверки каждого внутреннего URL и вручную сохраняет redirect-цепочки:
 
 ```text
 SUCCESS, REDIRECT, HTTP_4XX, HTTP_5XX,
-TIMEOUT, NETWORK_ERROR, OTHER_HTTP_STATUS
+TIMEOUT, NETWORK_ERROR, REDIRECT_ERROR, PAGE_LIMIT,
+OTHER_HTTP_STATUS
 ```
 
 ```powershell
@@ -44,10 +45,14 @@ go run ./cmd/graphsite --slow-delay "100ms"
 В другом терминале:
 
 ```powershell
-go run ./cmd/crawler --url "http://127.0.0.1:8080/index.html" --depth 3 --max-pages 100 --timeout "2s"
+go run ./cmd/crawler --url "http://127.0.0.1:8080/index.html" --depth 3 --max-pages 100 --max-redirects 10 --timeout "2s"
 ```
 
-Используется явный LIFO-стек, `visited`, минимальная обнаруженная глубина и сохранение всех страниц-источников. Одна проблемная ссылка представлена одним `Problem`, содержащим все разные страницы-источники. Workers и ручная обработка redirect появятся на следующих этапах. Подробности находятся в [документации этапа 3](docs/crawler/stage-03.md).
+Стандартное автоматическое следование redirect не используется. Crawler сам читает `Location`, разрешает относительный адрес через `net/url`, записывает каждый ответ `3xx`, обнаруживает цикл и соблюдает `--max-redirects`. Конечный HTML разбирается относительно конечного URL. Внешняя redirect-цель сохраняется, но не запрашивается.
+
+Общий fetch-кэш гарантирует, что один нормализованный внутренний URL запрашивается не более одного раза, даже если он встречается и как обычная ссылка, и внутри redirect-цепочки. Каждый новый фактически запрошенный URL входит в `--max-pages`; внешний target лимит не расходует.
+
+Используется явный LIFO-стек, `visited`, минимальная обнаруженная глубина и сохранение всех страниц-источников. Одна проблемная ссылка представлена одним `Problem`, содержащим все разные страницы-источники. Workers появятся на следующем этапе. Подробности находятся в [документации этапа 4](docs/crawler/stage-04.md).
 
 ## Правило внутренней ссылки
 
@@ -83,7 +88,7 @@ go test "-coverpkg=./internal/crawler,./internal/crawlercli" ./tests/...
 
 Все тесты находятся в отдельной папке `tests`. Они проверяют crawler через публичный API. Логика CLI вынесена в `internal/crawlercli`, поэтому её можно тестировать без запуска дочернего процесса.
 
-## Структура проекта после этапа 3
+## Структура проекта после этапа 4
 
 ```text
 graph-test-site-go/
@@ -109,6 +114,7 @@ graph-test-site-go/
 │   │   ├── classify.go
 │   │   ├── config.go
 │   │   ├── crawl.go
+│   │   ├── fetch.go
 │   │   ├── inspect.go
 │   │   ├── links.go
 │   │   ├── normalize.go
@@ -121,12 +127,13 @@ graph-test-site-go/
 │   │   ├── graphsite_test.go
 │   │   ├── links_test.go
 │   │   ├── normalize_test.go
+│   │   ├── redirect_test.go
 │   │   └── results_test.go
 │   └── crawlercli/
 │       └── run_test.go
 ├── docs/crawler/
 │   ├── stage-02.md
-│   └── stage-03.md
+│   └── stage-04.md
 ├── go.mod
 ├── go.sum
 └── README.md

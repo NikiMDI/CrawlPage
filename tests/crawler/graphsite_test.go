@@ -46,6 +46,7 @@ func TestCrawlCurrentGraphSiteAtDepthThree(t *testing.T) {
 		"/hub.html",
 		"/redirect-once",
 		"/redirect-chain/start",
+		"/redirect-chain/middle",
 		"/slow.html",
 		"/missing-page.html",
 		"/server-error",
@@ -53,11 +54,14 @@ func TestCrawlCurrentGraphSiteAtDepthThree(t *testing.T) {
 	if got := requests.snapshot(); !reflect.DeepEqual(got, wantOrder) {
 		t.Fatalf("request order =\n%v\nwant strict DFS order =\n%v", got, wantOrder)
 	}
+	if result.PagesChecked != 18 {
+		t.Fatalf("pages checked = %d, want 18 unique HTTP URLs", result.PagesChecked)
+	}
 	if len(result.Pages) != 17 {
-		t.Fatalf("pages checked = %d, want 17", len(result.Pages))
+		t.Fatalf("logical DFS results = %d, want 17", len(result.Pages))
 	}
 	if result.LinksDiscovered != 27 {
-		t.Fatalf("links discovered = %d, want 27", result.LinksDiscovered)
+		t.Fatalf("links discovered = %d, want 27 without cached-document duplicates", result.LinksDiscovered)
 	}
 	if len(result.SourcesByURL) != 19 {
 		t.Fatalf("unique normalized target URLs = %d, want 19", len(result.SourcesByURL))
@@ -71,12 +75,25 @@ func TestCrawlCurrentGraphSiteAtDepthThree(t *testing.T) {
 		resultCounts[page.ResultKind]++
 	}
 	wantResultCounts := map[crawler.ResultKind]int{
-		crawler.ResultSuccess:      13,
-		crawler.ResultRedirect:     2,
-		crawler.ResultHTTP4XX:      1,
-		crawler.ResultHTTP5XX:      1,
-		crawler.ResultTimeout:      0,
-		crawler.ResultNetworkError: 0,
+		crawler.ResultSuccess:       15,
+		crawler.ResultRedirect:      0,
+		crawler.ResultRedirectError: 0,
+		crawler.ResultHTTP4XX:       1,
+		crawler.ResultHTTP5XX:       1,
+		crawler.ResultTimeout:       0,
+		crawler.ResultNetworkError:  0,
+	}
+	redirectChains := 0
+	redirectHops := 0
+	for _, page := range result.Pages {
+		if len(page.RedirectChain) == 0 {
+			continue
+		}
+		redirectChains++
+		redirectHops += len(page.RedirectChain)
+	}
+	if redirectChains != 2 || redirectHops != 3 {
+		t.Fatalf("redirects = %d chains and %d hops, want 2 and 3", redirectChains, redirectHops)
 	}
 	for kind, want := range wantResultCounts {
 		if got := resultCounts[kind]; got != want {
@@ -131,7 +148,15 @@ func TestCrawlCurrentGraphSiteAtDepthThree(t *testing.T) {
 }
 
 func linkKindCounts(result crawler.CrawlResult) (internal int, external int) {
+	countedDocuments := make(map[string]struct{})
 	for _, page := range result.Pages {
+		if !page.HTMLParsed {
+			continue
+		}
+		if _, counted := countedDocuments[page.FinalURL]; counted {
+			continue
+		}
+		countedDocuments[page.FinalURL] = struct{}{}
 		for _, link := range page.Links {
 			switch link.Kind {
 			case crawler.LinkInternal:

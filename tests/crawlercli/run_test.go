@@ -14,7 +14,7 @@ import (
 	"example.com/graph-test-site-go/internal/crawlercli"
 )
 
-func TestRunPrintsStageFourDFSReport(t *testing.T) {
+func TestRunPrintsStageFiveDFSReport(t *testing.T) {
 	var requestsMu sync.Mutex
 	var requests []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -39,6 +39,7 @@ func TestRunPrintsStageFourDFSReport(t *testing.T) {
 			"--url", server.URL + "/",
 			"--depth", "2",
 			"--max-pages", "2",
+			"--concurrency", "1",
 			"--timeout", "1s",
 		},
 		&stdout,
@@ -55,17 +56,18 @@ func TestRunPrintsStageFourDFSReport(t *testing.T) {
 		t.Fatalf("request order = %v, want DFS prefix %v", gotRequests, wantRequests)
 	}
 	for _, expected := range []string{
-		"Stage 4: redirect chains",
+		"Stage 5: concurrent crawler",
 		"Maximum depth:      2",
 		"Maximum pages:      2",
 		"Maximum redirects:  10",
+		"Concurrency:        1",
 		"Max pages reached:  true",
 		"Pages checked:      2",
 		"Links discovered:   2",
 		"Successful:         2",
 		"Broken links:       0",
 		"Level 2 — details",
-		"DFS visit order",
+		"DFS-priority scheduling order",
 		"PAGE 1",
 		"Depth:  0",
 		server.URL + "/a",
@@ -76,7 +78,7 @@ func TestRunPrintsStageFourDFSReport(t *testing.T) {
 	}
 }
 
-func TestRunRejectsInvalidStageFourConfiguration(t *testing.T) {
+func TestRunRejectsInvalidStageFiveConfiguration(t *testing.T) {
 	tests := []struct {
 		name string
 		args []string
@@ -86,6 +88,8 @@ func TestRunRejectsInvalidStageFourConfiguration(t *testing.T) {
 		{name: "zero pages", args: []string{"--url", "http://example.com", "--max-pages", "0"}},
 		{name: "zero timeout", args: []string{"--url", "http://example.com", "--timeout", "0s"}},
 		{name: "negative redirects", args: []string{"--url", "http://example.com", "--max-redirects", "-1"}},
+		{name: "zero concurrency", args: []string{"--url", "http://example.com", "--concurrency", "0"}},
+		{name: "negative concurrency", args: []string{"--url", "http://example.com", "--concurrency", "-1"}},
 	}
 
 	for _, test := range tests {
@@ -138,6 +142,7 @@ func TestRunPrintsHTTPResultSummaryAndProblemSources(t *testing.T) {
 			"--url", server.URL + "/",
 			"--depth", "1",
 			"--max-pages", "10",
+			"--concurrency", "1",
 			"--timeout", "1s",
 		},
 		&stdout,
@@ -186,6 +191,7 @@ func TestRunPrintsTimeoutWithoutHTTPStatus(t *testing.T) {
 			"--url", server.URL,
 			"--depth", "0",
 			"--max-pages", "1",
+			"--concurrency", "1",
 			"--timeout", "50ms",
 		},
 		&stdout,
@@ -234,6 +240,7 @@ func TestRunReportsActualFetchDepth(t *testing.T) {
 			"--url", server.URL + "/",
 			"--depth", "3",
 			"--max-pages", "10",
+			"--concurrency", "1",
 			"--timeout", "1s",
 		},
 		&stdout,
@@ -275,6 +282,7 @@ func TestRunPrintsRedirectCycleMarker(t *testing.T) {
 			"--depth", "0",
 			"--max-pages", "2",
 			"--max-redirects", "10",
+			"--concurrency", "1",
 			"--timeout", "1s",
 		},
 		&stdout,
@@ -325,6 +333,7 @@ func TestRunCountsEveryUniqueRedirectURLAsChecked(t *testing.T) {
 			"--depth", "0",
 			"--max-pages", "3",
 			"--max-redirects", "10",
+			"--concurrency", "1",
 			"--timeout", "1s",
 		},
 		&stdout,
@@ -373,6 +382,7 @@ func TestRunReportsPageLimitInsideRedirectChain(t *testing.T) {
 			"--depth", "0",
 			"--max-pages", "2",
 			"--max-redirects", "10",
+			"--concurrency", "1",
 			"--timeout", "1s",
 		},
 		&stdout,
@@ -425,6 +435,7 @@ func TestRunCountsDirectTargetAfterUnfollowedRedirect(t *testing.T) {
 			"--depth", "2",
 			"--max-pages", "10",
 			"--max-redirects", "0",
+			"--concurrency", "1",
 			"--timeout", "1s",
 		},
 		&stdout,

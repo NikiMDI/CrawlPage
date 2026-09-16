@@ -12,6 +12,7 @@ type Config struct {
 	MaxDepth       int
 	MaxPages       int
 	MaxRedirects   int
+	Concurrency    int
 }
 
 func (c Config) Validate() error {
@@ -31,6 +32,9 @@ func validateConfig(config Config) (*url.URL, error) {
 	}
 	if config.MaxRedirects < 0 {
 		return nil, fmt.Errorf("maximum redirects must be zero or greater")
+	}
+	if config.Concurrency <= 0 {
+		return nil, fmt.Errorf("concurrency must be positive")
 	}
 
 	startURL, err := normalizeStartURL(config.StartURL)

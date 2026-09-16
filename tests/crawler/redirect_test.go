@@ -611,6 +611,7 @@ func newRedirectInspector(
 		MaxDepth:       maxDepth,
 		MaxPages:       maxPages,
 		MaxRedirects:   maxRedirects,
+		Concurrency:    1,
 	})
 	if err != nil {
 		t.Fatalf("crawler.New: %v", err)

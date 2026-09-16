@@ -59,6 +59,7 @@ type CrawlResult struct {
 	MaxDepth        int
 	MaxPages        int
 	MaxRedirects    int
+	Concurrency     int
 	PagesChecked    int
 	Pages           []PageResult
 	DepthByURL      map[string]int

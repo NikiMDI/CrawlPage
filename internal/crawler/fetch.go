@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sync"
 )
 
 type fetchedURL struct {
@@ -18,17 +19,24 @@ type fetchedURL struct {
 	Hrefs       []string
 }
 
+type fetchEntry struct {
+	ready  chan struct{}
+	result fetchedURL
+	err    error
+}
+
 type crawlSession struct {
+	mu              sync.Mutex
 	maxPages        int
 	pagesChecked    int
 	maxPagesReached bool
-	cache           map[string]fetchedURL
+	cache           map[string]*fetchEntry
 }
 
 func newCrawlSession(maxPages int) *crawlSession {
 	return &crawlSession{
 		maxPages: maxPages,
-		cache:    make(map[string]fetchedURL),
+		cache:    make(map[string]*fetchEntry),
 	}
 }
 
@@ -38,21 +46,43 @@ func (s *crawlSession) fetch(
 	target *url.URL,
 ) (fetchedURL, bool, error) {
 	key := target.String()
-	if cached, exists := s.cache[key]; exists {
-		return cached, true, nil
+
+	s.mu.Lock()
+	if entry, exists := s.cache[key]; exists {
+		s.mu.Unlock()
+		select {
+		case <-entry.ready:
+			return entry.result, true, entry.err
+		case <-ctx.Done():
+			return fetchedURL{}, true, ctx.Err()
+		}
 	}
 	if s.pagesChecked >= s.maxPages {
 		s.maxPagesReached = true
+		s.mu.Unlock()
 		return fetchedURL{}, false, nil
 	}
 
+	entry := &fetchEntry{ready: make(chan struct{})}
+	s.cache[key] = entry
 	s.pagesChecked++
+	s.mu.Unlock()
+
 	fetched, err := inspector.fetchURL(ctx, target)
-	if err != nil {
-		return fetchedURL{}, true, err
-	}
-	s.cache[key] = fetched
-	return fetched, true, nil
+
+	s.mu.Lock()
+	entry.result = fetched
+	entry.err = err
+	close(entry.ready)
+	s.mu.Unlock()
+
+	return fetched, true, err
+}
+
+func (s *crawlSession) stats() (pagesChecked int, maxPagesReached bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.pagesChecked, s.maxPagesReached
 }
 
 func (i *Inspector) fetchURL(ctx context.Context, target *url.URL) (fetchedURL, error) {

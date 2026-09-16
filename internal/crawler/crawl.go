@@ -3,6 +3,8 @@ package crawler
 import (
 	"context"
 	"net/url"
+	"sort"
+	"sync"
 )
 
 type crawlJob struct {
@@ -17,111 +19,41 @@ func (i *Inspector) Crawl(ctx context.Context) (result CrawlResult, err error) {
 		MaxDepth:     i.config.MaxDepth,
 		MaxPages:     i.config.MaxPages,
 		MaxRedirects: i.config.MaxRedirects,
+		Concurrency:  i.config.Concurrency,
 		DepthByURL:   map[string]int{i.startURL.String(): 0},
 		SourcesByURL: make(map[string][]string),
 	}
+
+	workerContext, cancelWorkers := context.WithCancel(ctx)
+	jobs := make(chan crawlTask)
+	workerResults := make(chan crawlWorkerResult, i.config.Concurrency)
+	var workers sync.WaitGroup
+	for workerIndex := 0; workerIndex < i.config.Concurrency; workerIndex++ {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			i.runWorker(workerContext, session, jobs, workerResults)
+		}()
+	}
+
+	scheduler := newCrawlScheduler(i, &result, jobs, workerResults)
 	defer func() {
-		result.PagesChecked = session.pagesChecked
-		result.MaxPagesReached = session.maxPagesReached
+		cancelWorkers()
+		close(jobs)
+		workers.Wait()
+
+		result.PagesChecked, result.MaxPagesReached = session.stats()
+		sort.SliceStable(result.Pages, func(left, right int) bool {
+			return scheduler.dispatchOrder[result.Pages[left].URL] <
+				scheduler.dispatchOrder[result.Pages[right].URL]
+		})
 		result.Problems = collectProblems(result.Pages, result.SourcesByURL)
 	}()
 
-	frontier := []crawlJob{{URL: i.startURL, Depth: 0}}
-	visited := make(map[string]int)
-	expandedAt := make(map[string]int)
-	sourceSets := make(map[string]map[string]struct{})
-	countedLinkDocuments := make(map[string]struct{})
-
-	for len(frontier) > 0 {
-		if err := ctx.Err(); err != nil {
-			return result, err
-		}
-
-		last := len(frontier) - 1
-		job := frontier[last]
-		frontier = frontier[:last]
-		currentURL := job.URL.String()
-
-		bestDepth, exists := result.DepthByURL[currentURL]
-		if !exists || bestDepth != job.Depth {
-			continue
-		}
-
-		pagePosition, alreadyVisited := visited[currentURL]
-		if !alreadyVisited {
-			page, pageChecked, inspectErr := i.inspectURL(
-				ctx,
-				job.URL,
-				job.Depth,
-				session,
-			)
-			if !pageChecked {
-				if inspectErr != nil {
-					return result, inspectErr
-				}
-				continue
-			}
-
-			pagePosition = len(result.Pages)
-			visited[currentURL] = pagePosition
-			result.Pages = append(result.Pages, page)
-			if _, counted := countedLinkDocuments[page.FinalURL]; page.HTMLParsed && !counted {
-				countedLinkDocuments[page.FinalURL] = struct{}{}
-				result.LinksDiscovered += page.LinksDiscovered
-			}
-			recordSources(&result, page, sourceSets)
-			if inspectErr != nil {
-				return result, inspectErr
-			}
-
-			if err := ctx.Err(); err != nil {
-				return result, err
-			}
-		} else if job.Depth < result.Pages[pagePosition].Depth {
-			result.Pages[pagePosition].Depth = job.Depth
-		}
-
-		page := result.Pages[pagePosition]
-		previousExpansionDepth, wasExpanded := expandedAt[currentURL]
-		if wasExpanded && previousExpansionDepth <= job.Depth {
-			continue
-		}
-		expandedAt[currentURL] = job.Depth
-
-		children := make([]crawlJob, 0, len(page.Links))
-		for _, discovered := range page.Links {
-			if discovered.Kind != LinkInternal {
-				continue
-			}
-
-			childDepth := job.Depth + 1
-			knownDepth, wasDiscovered := result.DepthByURL[discovered.URL]
-			if wasDiscovered && knownDepth <= childDepth {
-				continue
-			}
-
-			result.DepthByURL[discovered.URL] = childDepth
-			if childPosition, childVisited := visited[discovered.URL]; childVisited {
-				result.Pages[childPosition].Depth = childDepth
-			}
-
-			if childDepth > i.config.MaxDepth {
-				continue
-			}
-
-			childURL, parseErr := url.Parse(discovered.URL)
-			if parseErr != nil {
-				continue
-			}
-			children = append(children, crawlJob{URL: childURL, Depth: childDepth})
-		}
-
-		for childIndex := len(children) - 1; childIndex >= 0; childIndex-- {
-			frontier = append(frontier, children[childIndex])
-		}
+	if err := ctx.Err(); err != nil {
+		return result, err
 	}
-
-	return result, nil
+	return result, scheduler.run(workerContext)
 }
 
 func collectProblems(pages []PageResult, sourcesByURL map[string][]string) []Problem {

@@ -493,6 +493,7 @@ func newTestInspector(
 		MaxDepth:       maxDepth,
 		MaxPages:       maxPages,
 		MaxRedirects:   10,
+		Concurrency:    1,
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)

@@ -136,6 +136,7 @@ func TestStartURLCanonicalizationThroughCrawlResult(t *testing.T) {
 		MaxDepth:       0,
 		MaxPages:       1,
 		MaxRedirects:   10,
+		Concurrency:    1,
 	})
 	if err != nil {
 		t.Fatalf("crawler.New: %v", err)
@@ -154,13 +155,15 @@ func TestStartURLCanonicalizationThroughCrawlResult(t *testing.T) {
 
 func TestCrawlerConfigValidation(t *testing.T) {
 	tests := []crawler.Config{
-		{StartURL: "", RequestTimeout: 1, MaxDepth: 1, MaxPages: 1, MaxRedirects: 10},
-		{StartURL: "/relative", RequestTimeout: 1, MaxDepth: 1, MaxPages: 1, MaxRedirects: 10},
-		{StartURL: "ftp://example.com", RequestTimeout: 1, MaxDepth: 1, MaxPages: 1, MaxRedirects: 10},
-		{StartURL: "http://example.com", RequestTimeout: 0, MaxDepth: 1, MaxPages: 1, MaxRedirects: 10},
-		{StartURL: "http://example.com", RequestTimeout: 1, MaxDepth: -1, MaxPages: 1, MaxRedirects: 10},
-		{StartURL: "http://example.com", RequestTimeout: 1, MaxDepth: 1, MaxPages: 0, MaxRedirects: 10},
-		{StartURL: "http://example.com", RequestTimeout: 1, MaxDepth: 1, MaxPages: 1, MaxRedirects: -1},
+		{StartURL: "", RequestTimeout: 1, MaxDepth: 1, MaxPages: 1, MaxRedirects: 10, Concurrency: 1},
+		{StartURL: "/relative", RequestTimeout: 1, MaxDepth: 1, MaxPages: 1, MaxRedirects: 10, Concurrency: 1},
+		{StartURL: "ftp://example.com", RequestTimeout: 1, MaxDepth: 1, MaxPages: 1, MaxRedirects: 10, Concurrency: 1},
+		{StartURL: "http://example.com", RequestTimeout: 0, MaxDepth: 1, MaxPages: 1, MaxRedirects: 10, Concurrency: 1},
+		{StartURL: "http://example.com", RequestTimeout: 1, MaxDepth: -1, MaxPages: 1, MaxRedirects: 10, Concurrency: 1},
+		{StartURL: "http://example.com", RequestTimeout: 1, MaxDepth: 1, MaxPages: 0, MaxRedirects: 10, Concurrency: 1},
+		{StartURL: "http://example.com", RequestTimeout: 1, MaxDepth: 1, MaxPages: 1, MaxRedirects: -1, Concurrency: 1},
+		{StartURL: "http://example.com", RequestTimeout: 1, MaxDepth: 1, MaxPages: 1, MaxRedirects: 10, Concurrency: 0},
+		{StartURL: "http://example.com", RequestTimeout: 1, MaxDepth: 1, MaxPages: 1, MaxRedirects: 10, Concurrency: -1},
 	}
 	for _, config := range tests {
 		if err := config.Validate(); err == nil {

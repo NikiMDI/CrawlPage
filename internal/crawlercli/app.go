@@ -23,6 +23,7 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	maxDepth := flags.Int("depth", 3, "maximum crawl depth; the start page has depth 0")
 	maxPages := flags.Int("max-pages", 100, "maximum number of unique internal URLs to request")
 	maxRedirects := flags.Int("max-redirects", 10, "maximum redirects followed for one URL")
+	concurrency := flags.Int("concurrency", 4, "maximum number of concurrent HTTP requests")
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
@@ -33,6 +34,7 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		MaxDepth:       *maxDepth,
 		MaxPages:       *maxPages,
 		MaxRedirects:   *maxRedirects,
+		Concurrency:    *concurrency,
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "configuration error: %v\n", err)
@@ -87,13 +89,14 @@ func writeReport(output io.Writer, result crawler.CrawlResult) {
 		}
 	}
 
-	fmt.Fprintln(output, "Stage 4: redirect chains")
+	fmt.Fprintln(output, "Stage 5: concurrent crawler")
 	fmt.Fprintln(output)
 	fmt.Fprintln(output, "Level 1 — summary")
 	fmt.Fprintf(output, "Start URL:          %s\n", result.StartURL)
 	fmt.Fprintf(output, "Maximum depth:      %d\n", result.MaxDepth)
 	fmt.Fprintf(output, "Maximum pages:      %d\n", result.MaxPages)
 	fmt.Fprintf(output, "Maximum redirects:  %d\n", result.MaxRedirects)
+	fmt.Fprintf(output, "Concurrency:        %d\n", result.Concurrency)
 	fmt.Fprintf(output, "Max pages reached:  %t\n", result.MaxPagesReached)
 	fmt.Fprintf(output, "Pages checked:      %d\n", result.PagesChecked)
 	fmt.Fprintf(output, "Links discovered:   %d\n", result.LinksDiscovered)
@@ -117,7 +120,7 @@ func writeReport(output io.Writer, result crawler.CrawlResult) {
 	fmt.Fprintln(output)
 	fmt.Fprintln(output, "Level 2 — details")
 	fmt.Fprintln(output)
-	fmt.Fprintln(output, "DFS visit order")
+	fmt.Fprintln(output, "DFS-priority scheduling order")
 	if len(result.Pages) == 0 {
 		fmt.Fprintln(output, "No pages were checked.")
 		return

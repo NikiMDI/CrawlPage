@@ -8,6 +8,7 @@ import (
 type crawlScheduler struct {
 	inspector *Inspector
 	result    *CrawlResult
+	session   *crawlSession
 	jobs      chan<- crawlTask
 	results   <-chan crawlWorkerResult
 
@@ -21,17 +22,20 @@ type crawlScheduler struct {
 	dispatchOrder        map[string]int
 	nextSequence         int
 	active               int
+	pageLimitReached     bool
 }
 
 func newCrawlScheduler(
 	inspector *Inspector,
 	result *CrawlResult,
+	session *crawlSession,
 	jobs chan<- crawlTask,
 	results <-chan crawlWorkerResult,
 ) *crawlScheduler {
 	return &crawlScheduler{
 		inspector:            inspector,
 		result:               result,
+		session:              session,
 		jobs:                 jobs,
 		results:              results,
 		frontier:             []crawlJob{{URL: inspector.startURL, Depth: 0}},
@@ -110,6 +114,9 @@ func (s *crawlScheduler) nextRunnableJob() (crawlJob, bool) {
 		if _, inFlight := s.running[key]; inFlight {
 			continue
 		}
+		if s.pageLimitReached && !s.session.hasFetchEntry(key) {
+			continue
+		}
 
 		return job, true
 	}
@@ -119,10 +126,14 @@ func (s *crawlScheduler) nextRunnableJob() (crawlJob, bool) {
 func (s *crawlScheduler) accept(workerResult crawlWorkerResult) error {
 	job := workerResult.Task.Job
 	key := job.URL.String()
+	if workerResult.Err != nil {
+		return workerResult.Err
+	}
 
 	if !workerResult.PageChecked {
+		s.pageLimitReached = true
 		s.unavailable[key] = struct{}{}
-		return workerResult.Err
+		return nil
 	}
 
 	page := workerResult.Page
@@ -141,7 +152,7 @@ func (s *crawlScheduler) accept(workerResult crawlWorkerResult) error {
 	recordSources(s.result, page, s.sourceSets)
 	s.expand(pagePosition, page.Depth)
 
-	return workerResult.Err
+	return nil
 }
 
 func (s *crawlScheduler) expand(pagePosition int, depth int) {
@@ -165,7 +176,8 @@ func (s *crawlScheduler) expand(pagePosition int, depth int) {
 		}
 
 		s.result.DepthByURL[discovered.URL] = childDepth
-		if childPosition, childDone := s.completed[discovered.URL]; childDone {
+		childPosition, childDone := s.completed[discovered.URL]
+		if childDone {
 			s.result.Pages[childPosition].Depth = childDepth
 		}
 
@@ -173,6 +185,10 @@ func (s *crawlScheduler) expand(pagePosition int, depth int) {
 			continue
 		}
 		if _, blocked := s.unavailable[discovered.URL]; blocked {
+			continue
+		}
+		if s.pageLimitReached && !childDone &&
+			!s.session.hasFetchEntry(discovered.URL) {
 			continue
 		}
 

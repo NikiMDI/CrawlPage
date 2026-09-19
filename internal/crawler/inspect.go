@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 )
 
 type LinkKind string
@@ -60,6 +61,7 @@ type CrawlResult struct {
 	MaxPages        int
 	MaxRedirects    int
 	Concurrency     int
+	Elapsed         time.Duration
 	PagesChecked    int
 	Pages           []PageResult
 	DepthByURL      map[string]int

@@ -2,9 +2,11 @@ package crawlercli
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 	"time"
 
@@ -43,6 +45,10 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 
 	result, err := inspector.Crawl(ctx)
 	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			fmt.Fprintln(stderr, "crawl cancelled")
+			return 130
+		}
 		fmt.Fprintf(stderr, "crawl failed: %v\n", err)
 		return 1
 	}
@@ -89,14 +95,13 @@ func writeReport(output io.Writer, result crawler.CrawlResult) {
 		}
 	}
 
-	fmt.Fprintln(output, "Stage 5: concurrent crawler")
-	fmt.Fprintln(output)
 	fmt.Fprintln(output, "Level 1 — summary")
 	fmt.Fprintf(output, "Start URL:          %s\n", result.StartURL)
 	fmt.Fprintf(output, "Maximum depth:      %d\n", result.MaxDepth)
 	fmt.Fprintf(output, "Maximum pages:      %d\n", result.MaxPages)
 	fmt.Fprintf(output, "Maximum redirects:  %d\n", result.MaxRedirects)
 	fmt.Fprintf(output, "Concurrency:        %d\n", result.Concurrency)
+	fmt.Fprintf(output, "Elapsed:            %s\n", formatElapsed(result.Elapsed))
 	fmt.Fprintf(output, "Max pages reached:  %t\n", result.MaxPagesReached)
 	fmt.Fprintf(output, "Pages checked:      %d\n", result.PagesChecked)
 	fmt.Fprintf(output, "Links discovered:   %d\n", result.LinksDiscovered)
@@ -283,12 +288,21 @@ func writeReport(output io.Writer, result crawler.CrawlResult) {
 	}
 }
 
+func formatElapsed(elapsed time.Duration) time.Duration {
+	if elapsed < time.Millisecond {
+		return elapsed.Round(time.Microsecond)
+	}
+	return elapsed.Round(time.Millisecond)
+}
+
 func writeSources(output io.Writer, sources []string) {
 	if len(sources) == 0 {
 		fmt.Fprintln(output, "- [start URL]")
 		return
 	}
-	for _, source := range sources {
+	ordered := append([]string(nil), sources...)
+	sort.Strings(ordered)
+	for _, source := range ordered {
 		fmt.Fprintf(output, "- %s\n", source)
 	}
 }

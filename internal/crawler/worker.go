@@ -28,6 +28,9 @@ func (i *Inspector) runWorker(
 			if !open {
 				return
 			}
+			if ctx.Err() != nil {
+				return
+			}
 
 			page, pageChecked, err := i.inspectURL(
 				ctx,

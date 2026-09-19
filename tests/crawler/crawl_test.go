@@ -322,6 +322,59 @@ func TestMaxPagesStillAllowsCachedDepthRelaxation(t *testing.T) {
 	}
 }
 
+func TestPageLimitStillAllowsCachedRedirectTarget(t *testing.T) {
+	var requests requestRecorder
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.add(r.URL.Path)
+		switch r.URL.Path {
+		case "/":
+			writeTestHTML(
+				w,
+				`<a href="/old">Old</a>`,
+				`<a href="/uncached">Uncached</a>`,
+				`<a href="/target">Target</a>`,
+			)
+		case "/old":
+			w.Header().Set("Location", "/target")
+			w.WriteHeader(http.StatusFound)
+		case "/target":
+			writeTestHTML(w, `<a href="/leaf">Leaf</a>`)
+		default:
+			writeTestHTML(w)
+		}
+	}))
+	defer server.Close()
+
+	inspector := newTestInspector(t, server.URL+"/", 2, 3, time.Second)
+	result, err := inspector.Crawl(context.Background())
+	if err != nil {
+		t.Fatalf("Crawl: %v", err)
+	}
+
+	if got := requests.snapshot(); !reflect.DeepEqual(got, []string{"/", "/old", "/target"}) {
+		t.Fatalf("HTTP requests = %v, want root, redirect source, and target", got)
+	}
+	if result.PagesChecked != 3 || !result.MaxPagesReached {
+		t.Fatalf(
+			"pages checked/max reached = %d/%t, want 3/true",
+			result.PagesChecked,
+			result.MaxPagesReached,
+		)
+	}
+	target := findPage(t, result, server.URL+"/target")
+	if target.ResultKind != crawler.ResultSuccess || !target.HTMLParsed {
+		t.Fatalf("cached direct target = %+v, want parsed SUCCESS", target)
+	}
+	if countPath(requests.snapshot(), "/target") != 1 {
+		t.Fatalf("redirect target was fetched more than once: %v", requests.snapshot())
+	}
+	for _, page := range result.Pages {
+		if page.URL == server.URL+"/uncached" || page.URL == server.URL+"/leaf" {
+			t.Fatalf("uncached URL was processed after max-pages: %+v", page)
+		}
+	}
+}
+
 func TestCrawlChecksNonHTMLWithoutParsingIt(t *testing.T) {
 	var requests requestRecorder
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -463,7 +516,7 @@ func TestCrawlWithCancelledContextMakesNoRequests(t *testing.T) {
 	}))
 	defer server.Close()
 
-	inspector := newTestInspector(t, server.URL+"/", 2, 20, time.Second)
+	inspector := newConcurrentInspector(t, server.URL+"/", 2, 20, 8)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 

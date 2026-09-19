@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"sort"
 	"sync"
+	"time"
 )
 
 type crawlJob struct {
@@ -13,6 +14,7 @@ type crawlJob struct {
 }
 
 func (i *Inspector) Crawl(ctx context.Context) (result CrawlResult, err error) {
+	startedAt := time.Now()
 	session := newCrawlSession(i.config.MaxPages)
 	result = CrawlResult{
 		StartURL:     i.startURL.String(),
@@ -36,7 +38,7 @@ func (i *Inspector) Crawl(ctx context.Context) (result CrawlResult, err error) {
 		}()
 	}
 
-	scheduler := newCrawlScheduler(i, &result, jobs, workerResults)
+	scheduler := newCrawlScheduler(i, &result, session, jobs, workerResults)
 	defer func() {
 		cancelWorkers()
 		close(jobs)
@@ -48,6 +50,7 @@ func (i *Inspector) Crawl(ctx context.Context) (result CrawlResult, err error) {
 				scheduler.dispatchOrder[result.Pages[right].URL]
 		})
 		result.Problems = collectProblems(result.Pages, result.SourcesByURL)
+		result.Elapsed = time.Since(startedAt)
 	}()
 
 	if err := ctx.Err(); err != nil {

@@ -45,6 +45,9 @@ func (s *crawlSession) fetch(
 	inspector *Inspector,
 	target *url.URL,
 ) (fetchedURL, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return fetchedURL{}, false, err
+	}
 	key := target.String()
 
 	s.mu.Lock()
@@ -83,6 +86,13 @@ func (s *crawlSession) stats() (pagesChecked int, maxPagesReached bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.pagesChecked, s.maxPagesReached
+}
+
+func (s *crawlSession) hasFetchEntry(target string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, exists := s.cache[target]
+	return exists
 }
 
 func (i *Inspector) fetchURL(ctx context.Context, target *url.URL) (fetchedURL, error) {

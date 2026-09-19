@@ -10,11 +10,12 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"example.com/graph-test-site-go/internal/crawlercli"
 )
 
-func TestRunPrintsStageFiveDFSReport(t *testing.T) {
+func TestRunPrintsFinalDFSReport(t *testing.T) {
 	var requestsMu sync.Mutex
 	var requests []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -56,11 +57,11 @@ func TestRunPrintsStageFiveDFSReport(t *testing.T) {
 		t.Fatalf("request order = %v, want DFS prefix %v", gotRequests, wantRequests)
 	}
 	for _, expected := range []string{
-		"Stage 5: concurrent crawler",
 		"Maximum depth:      2",
 		"Maximum pages:      2",
 		"Maximum redirects:  10",
 		"Concurrency:        1",
+		"Elapsed:",
 		"Max pages reached:  true",
 		"Pages checked:      2",
 		"Links discovered:   2",
@@ -78,7 +79,7 @@ func TestRunPrintsStageFiveDFSReport(t *testing.T) {
 	}
 }
 
-func TestRunRejectsInvalidStageFiveConfiguration(t *testing.T) {
+func TestRunRejectsInvalidConfiguration(t *testing.T) {
 	tests := []struct {
 		name string
 		args []string
@@ -105,6 +106,79 @@ func TestRunRejectsInvalidStageFiveConfiguration(t *testing.T) {
 				t.Fatalf("stderr = %q, want configuration error", stderr.String())
 			}
 		})
+	}
+}
+
+func TestRunReturns130WhenContextIsCancelled(t *testing.T) {
+	requestStarted := make(chan struct{})
+	requestStopped := make(chan struct{})
+	var startOnce sync.Once
+	var stopOnce sync.Once
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		startOnce.Do(func() { close(requestStarted) })
+		<-r.Context().Done()
+		stopOnce.Do(func() { close(requestStopped) })
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	type runOutcome struct {
+		exitCode int
+		stdout   string
+		stderr   string
+	}
+	finished := make(chan runOutcome, 1)
+	go func() {
+		var stdout bytes.Buffer
+		var stderr bytes.Buffer
+		exitCode := crawlercli.Run(
+			ctx,
+			[]string{
+				"--url", server.URL,
+				"--depth", "3",
+				"--max-pages", "100",
+				"--concurrency", "4",
+				"--timeout", "5s",
+			},
+			&stdout,
+			&stderr,
+		)
+		finished <- runOutcome{
+			exitCode: exitCode,
+			stdout:   stdout.String(),
+			stderr:   stderr.String(),
+		}
+	}()
+
+	select {
+	case <-requestStarted:
+		cancel()
+	case <-time.After(3 * time.Second):
+		cancel()
+		t.Fatal("CLI request did not start")
+	}
+
+	var outcome runOutcome
+	select {
+	case outcome = <-finished:
+	case <-time.After(3 * time.Second):
+		t.Fatal("CLI did not stop after cancellation")
+	}
+	select {
+	case <-requestStopped:
+	case <-time.After(3 * time.Second):
+		t.Fatal("CLI HTTP request remained active after cancellation")
+	}
+
+	if outcome.exitCode != 130 {
+		t.Fatalf("Run exit code = %d, want 130", outcome.exitCode)
+	}
+	if outcome.stderr != "crawl cancelled\n" {
+		t.Fatalf("stderr = %q, want cancellation message", outcome.stderr)
+	}
+	if outcome.stdout != "" {
+		t.Fatalf("cancelled crawl printed a partial report:\n%s", outcome.stdout)
 	}
 }
 

@@ -16,13 +16,15 @@ const (
 	ResultHTTP5XX         ResultKind = "HTTP_5XX"
 	ResultTimeout         ResultKind = "TIMEOUT"
 	ResultNetworkError    ResultKind = "NETWORK_ERROR"
+	ResultHTMLTooLarge    ResultKind = "HTML_TOO_LARGE"
 	ResultOtherHTTPStatus ResultKind = "OTHER_HTTP_STATUS"
 	ResultPageLimit       ResultKind = "PAGE_LIMIT"
 )
 
 func (kind ResultKind) IsBroken() bool {
 	switch kind {
-	case ResultRedirectError, ResultHTTP4XX, ResultHTTP5XX, ResultTimeout, ResultNetworkError:
+	case ResultRedirectError, ResultHTTP4XX, ResultHTTP5XX, ResultTimeout,
+		ResultNetworkError, ResultHTMLTooLarge:
 		return true
 	default:
 		return false

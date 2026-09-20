@@ -3,6 +3,7 @@ package crawler_test
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -53,6 +54,98 @@ func TestRedirectChainKeepsEveryHopAndFinalResult(t *testing.T) {
 	}
 	if page.FinalURL != server.URL+"/final" || page.ResultKind != crawler.ResultSuccess || page.Status != "200 OK" {
 		t.Fatalf("final result = URL %q, kind %s, status %q", page.FinalURL, page.ResultKind, page.Status)
+	}
+}
+
+func TestHTTPRedirectUpgradeToHTTPSStaysInScopeAndContinuesCrawl(t *testing.T) {
+	var secureRequests requestRecorder
+	secureServer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		secureRequests.add(r.URL.Path)
+		switch r.URL.Path {
+		case "/secure":
+			writeTestHTML(w, `<a href="/next">Next</a>`)
+		case "/next":
+			writeTestHTML(w)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer secureServer.Close()
+
+	plainServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/start" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Location", "https://upgrade.test/secure")
+		w.WriteHeader(http.StatusMovedPermanently)
+	}))
+	defer plainServer.Close()
+
+	transport := secureServer.Client().Transport.(*http.Transport).Clone()
+	transport.Proxy = nil
+	transport.TLSClientConfig = transport.TLSClientConfig.Clone()
+	// The connection is routed to httptest's TLS server under the synthetic
+	// hostname upgrade.test. Certificate verification is disabled only in
+	// this test; production uses http.DefaultTransport unchanged.
+	transport.TLSClientConfig.InsecureSkipVerify = true
+	dialer := &net.Dialer{}
+	transport.DialContext = func(
+		ctx context.Context,
+		network string,
+		address string,
+	) (net.Conn, error) {
+		switch address {
+		case "upgrade.test:80":
+			address = plainServer.Listener.Addr().String()
+		case "upgrade.test:443":
+			address = secureServer.Listener.Addr().String()
+		default:
+			return nil, fmt.Errorf("unexpected test address %s", address)
+		}
+		return dialer.DialContext(ctx, network, address)
+	}
+
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() {
+		http.DefaultTransport = originalTransport
+		transport.CloseIdleConnections()
+	})
+
+	inspector := newRedirectInspector(
+		t,
+		"http://upgrade.test/start",
+		1,
+		10,
+		time.Second,
+		10,
+	)
+	result, err := inspector.Crawl(context.Background())
+	if err != nil {
+		t.Fatalf("Crawl: %v", err)
+	}
+
+	startPage := findPage(t, result, "http://upgrade.test/start")
+	if startPage.ResultKind != crawler.ResultSuccess || startPage.RedirectedOutsideScope {
+		t.Fatalf("HTTP to HTTPS redirect result = %+v, want in-scope SUCCESS", startPage)
+	}
+	if startPage.FinalURL != "https://upgrade.test/secure" || len(startPage.RedirectChain) != 1 {
+		t.Fatalf("redirect chain = %+v, final URL = %q", startPage.RedirectChain, startPage.FinalURL)
+	}
+	if startPage.RedirectChain[0].Status != "301 Moved Permanently" {
+		t.Fatalf("redirect status = %q, want 301", startPage.RedirectChain[0].Status)
+	}
+
+	nextPage := findPage(t, result, "https://upgrade.test/next")
+	if nextPage.ResultKind != crawler.ResultSuccess || nextPage.Depth != 1 {
+		t.Fatalf("HTTPS child page = %+v, want depth-1 SUCCESS", nextPage)
+	}
+	if got := secureRequests.snapshot(); !reflect.DeepEqual(got, []string{"/secure", "/next"}) {
+		t.Fatalf("HTTPS requests = %v, want secure page followed by child", got)
+	}
+	if result.PagesChecked != 3 {
+		t.Fatalf("pages checked = %d, want HTTP redirect plus two HTTPS URLs", result.PagesChecked)
 	}
 }
 

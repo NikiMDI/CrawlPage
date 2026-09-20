@@ -36,7 +36,6 @@ func createPages() map[string]page {
 				{label: "Перейти в B", href: "b.html"},
 				{label: "Перейти в общую вершину", href: "/hub.html"},
 				{label: "Проверить медленный ответ", href: "/slow.html"},
-				{label: "Открыть PDF вершины A", href: "/assets/pdf/a.pdf"},
 			},
 		},
 		"/b.html": {
@@ -46,7 +45,6 @@ func createPages() map[string]page {
 				{label: "Перейти в C", href: "c.html"},
 				{label: "Перейти в общую вершину", href: "/hub.html"},
 				{label: "Перейти через одиночный redirect", href: "/redirect-once"},
-				{label: "Открыть PDF вершины B", href: "/assets/pdf/b.pdf"},
 			},
 		},
 		"/c.html": {
@@ -70,7 +68,6 @@ func createPages() map[string]page {
 			text:  "Первый шаг отдельной цепочки. При старте с index.html эта страница находится на глубине один.",
 			links: []link{
 				{label: "Продолжить на глубину 2", href: "depth-2.html"},
-				{label: "Открыть изображение глубины 1", href: "/assets/images/depth-1.png"},
 			},
 		},
 		"/depth-2.html": {
@@ -78,7 +75,6 @@ func createPages() map[string]page {
 			text:  "Второй шаг цепочки ведёт дальше единственным ребром, поэтому короткого пути к конечной странице нет.",
 			links: []link{
 				{label: "Продолжить на глубину 3", href: "depth-3.html"},
-				{label: "Открыть изображение глубины 2", href: "/assets/images/depth-2.jpg"},
 			},
 		},
 		"/depth-3.html": {

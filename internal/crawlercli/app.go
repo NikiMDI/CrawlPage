@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -26,7 +27,16 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	maxPages := flags.Int("max-pages", 100, "maximum number of unique internal URLs to request")
 	maxRedirects := flags.Int("max-redirects", 10, "maximum redirects followed for one URL")
 	concurrency := flags.Int("concurrency", 4, "maximum number of concurrent HTTP requests")
+	maxHTMLBytes := flags.Int64(
+		"max-html-bytes",
+		crawler.DefaultMaxHTMLBytes,
+		"maximum number of bytes read from one HTML response",
+	)
 	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if *maxHTMLBytes <= 0 {
+		fmt.Fprintln(stderr, "configuration error: maximum HTML bytes must be positive")
 		return 2
 	}
 
@@ -37,6 +47,7 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		MaxPages:       *maxPages,
 		MaxRedirects:   *maxRedirects,
 		Concurrency:    *concurrency,
+		MaxHTMLBytes:   *maxHTMLBytes,
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "configuration error: %v\n", err)
@@ -60,6 +71,7 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 func writeReport(output io.Writer, result crawler.CrawlResult) {
 	unique := make(map[string]struct{})
 	resultCounts := make(map[crawler.ResultKind]int)
+	httpStatusCounts := make(map[int]int)
 	internalCount := 0
 	externalCount := 0
 	skippedCount := 0
@@ -69,6 +81,12 @@ func writeReport(output io.Writer, result crawler.CrawlResult) {
 	countedLinkDocuments := make(map[string]struct{})
 	for _, page := range result.Pages {
 		resultCounts[page.ResultKind]++
+		if page.ResultKind == crawler.ResultHTTP4XX ||
+			page.ResultKind == crawler.ResultHTTP5XX {
+			if statusCode, ok := parseHTTPStatusCode(page.Status); ok {
+				httpStatusCounts[statusCode]++
+			}
+		}
 		if len(page.RedirectChain) > 0 {
 			redirectChains++
 			redirectHops += len(page.RedirectChain)
@@ -101,6 +119,7 @@ func writeReport(output io.Writer, result crawler.CrawlResult) {
 	fmt.Fprintf(output, "Maximum pages:      %d\n", result.MaxPages)
 	fmt.Fprintf(output, "Maximum redirects:  %d\n", result.MaxRedirects)
 	fmt.Fprintf(output, "Concurrency:        %d\n", result.Concurrency)
+	fmt.Fprintf(output, "Maximum HTML bytes: %d\n", result.MaxHTMLBytes)
 	fmt.Fprintf(output, "Elapsed:            %s\n", formatElapsed(result.Elapsed))
 	fmt.Fprintf(output, "Max pages reached:  %t\n", result.MaxPagesReached)
 	fmt.Fprintf(output, "Pages checked:      %d\n", result.PagesChecked)
@@ -117,9 +136,12 @@ func writeReport(output io.Writer, result crawler.CrawlResult) {
 	fmt.Fprintf(output, "Stopped by max-pages: %d\n", resultCounts[crawler.ResultPageLimit])
 	fmt.Fprintf(output, "Broken links:       %d\n", len(result.Problems))
 	fmt.Fprintf(output, "HTTP 4xx:           %d\n", resultCounts[crawler.ResultHTTP4XX])
+	writeHTTPStatusCounts(output, httpStatusCounts, 400, 499)
 	fmt.Fprintf(output, "HTTP 5xx:           %d\n", resultCounts[crawler.ResultHTTP5XX])
+	writeHTTPStatusCounts(output, httpStatusCounts, 500, 599)
 	fmt.Fprintf(output, "Timeouts:           %d\n", resultCounts[crawler.ResultTimeout])
 	fmt.Fprintf(output, "Network errors:     %d\n", resultCounts[crawler.ResultNetworkError])
+	fmt.Fprintf(output, "HTML too large:     %d\n", resultCounts[crawler.ResultHTMLTooLarge])
 	fmt.Fprintf(output, "Other HTTP statuses: %d\n", resultCounts[crawler.ResultOtherHTTPStatus])
 
 	fmt.Fprintln(output)
@@ -293,6 +315,37 @@ func formatElapsed(elapsed time.Duration) time.Duration {
 		return elapsed.Round(time.Microsecond)
 	}
 	return elapsed.Round(time.Millisecond)
+}
+
+func parseHTTPStatusCode(status string) (int, bool) {
+	fields := strings.Fields(status)
+	if len(fields) == 0 {
+		return 0, false
+	}
+
+	statusCode, err := strconv.Atoi(fields[0])
+	if err != nil || statusCode < 100 || statusCode > 999 {
+		return 0, false
+	}
+	return statusCode, true
+}
+
+func writeHTTPStatusCounts(
+	output io.Writer,
+	counts map[int]int,
+	minimum int,
+	maximum int,
+) {
+	statusCodes := make([]int, 0)
+	for statusCode := range counts {
+		if statusCode >= minimum && statusCode <= maximum {
+			statusCodes = append(statusCodes, statusCode)
+		}
+	}
+	sort.Ints(statusCodes)
+	for _, statusCode := range statusCodes {
+		fmt.Fprintf(output, "HTTP %d:           %d\n", statusCode, counts[statusCode])
+	}
 }
 
 func writeSources(output io.Writer, sources []string) {

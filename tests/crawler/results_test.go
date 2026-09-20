@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -229,6 +230,99 @@ func TestTimeoutWhileReadingBodyKeepsReceivedStatus(t *testing.T) {
 	if len(result.Problems) != 1 || result.Problems[0].Status != "200 OK" {
 		t.Fatalf("problem = %+v, want timeout with the received HTTP status", result.Problems)
 	}
+}
+
+func TestHTMLBodyLimitAcceptsExactSizeAndRejectsLargerChunkedBody(t *testing.T) {
+	const maxHTMLBytes int64 = 64
+
+	t.Run("exact limit", func(t *testing.T) {
+		body := `<a href="/inside">inside</a>`
+		body += strings.Repeat(" ", int(maxHTMLBytes)-len(body))
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "text/html")
+			fmt.Fprint(w, body)
+		}))
+		defer server.Close()
+
+		inspector, err := crawler.New(crawler.Config{
+			StartURL:       server.URL + "/",
+			RequestTimeout: time.Second,
+			MaxDepth:       0,
+			MaxPages:       1,
+			MaxRedirects:   10,
+			Concurrency:    1,
+			MaxHTMLBytes:   maxHTMLBytes,
+		})
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		result, err := inspector.Crawl(context.Background())
+		if err != nil {
+			t.Fatalf("Crawl: %v", err)
+		}
+
+		page := findPage(t, result, server.URL+"/")
+		if page.ResultKind != crawler.ResultSuccess || !page.HTMLParsed {
+			t.Fatalf("page = %+v, want parsed SUCCESS at exact limit", page)
+		}
+		if len(page.Links) != 1 || page.Links[0].URL != server.URL+"/inside" {
+			t.Fatalf("links = %+v, want the link from exact-size HTML", page.Links)
+		}
+	})
+
+	t.Run("larger chunked body", func(t *testing.T) {
+		var requests requestRecorder
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			requests.add(r.URL.Path)
+			w.Header().Set("Content-Type", "text/html")
+			if r.URL.Path != "/" {
+				writeTestHTML(w)
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+			w.(http.Flusher).Flush()
+			body := `<a href="/must-not-be-crawled">hidden</a>` +
+				strings.Repeat("x", int(maxHTMLBytes))
+			fmt.Fprint(w, body[:maxHTMLBytes+1])
+			w.(http.Flusher).Flush()
+			<-r.Context().Done()
+		}))
+		defer server.Close()
+
+		inspector, err := crawler.New(crawler.Config{
+			StartURL:       server.URL + "/",
+			RequestTimeout: time.Second,
+			MaxDepth:       1,
+			MaxPages:       10,
+			MaxRedirects:   10,
+			Concurrency:    1,
+			MaxHTMLBytes:   maxHTMLBytes,
+		})
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		result, err := inspector.Crawl(context.Background())
+		if err != nil {
+			t.Fatalf("Crawl: %v", err)
+		}
+
+		page := findPage(t, result, server.URL+"/")
+		if page.ResultKind != crawler.ResultHTMLTooLarge || page.HTMLParsed {
+			t.Fatalf("page = %+v, want unparsed HTML_TOO_LARGE", page)
+		}
+		if page.Status != "200 OK" || !strings.Contains(page.Error, "exceeds limit of 64 bytes") {
+			t.Fatalf("status/error = %q/%q", page.Status, page.Error)
+		}
+		if len(page.Links) != 0 || len(result.SourcesByURL) != 0 {
+			t.Fatalf("oversized partial HTML was parsed: %+v", page.Links)
+		}
+		if got := requests.snapshot(); !reflect.DeepEqual(got, []string{"/"}) {
+			t.Fatalf("requests = %v, want only the oversized start page", got)
+		}
+		if len(result.Problems) != 1 || result.Problems[0].Kind != crawler.ResultHTMLTooLarge {
+			t.Fatalf("problems = %+v, want one HTML_TOO_LARGE", result.Problems)
+		}
+	})
 }
 
 func TestProblemKeepsAllDistinctSources(t *testing.T) {

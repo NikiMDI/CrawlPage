@@ -3,7 +3,6 @@ package site
 import (
 	"fmt"
 	"net/http"
-	"strings"
 	"time"
 )
 
@@ -14,7 +13,6 @@ type Config struct {
 type handler struct {
 	pages     map[string]page
 	renderer  renderer
-	assets    http.Handler
 	slowDelay time.Duration
 }
 
@@ -28,15 +26,9 @@ func NewHandler(config Config) (http.Handler, error) {
 		return nil, fmt.Errorf("create HTML renderer: %w", err)
 	}
 
-	assetHandler, err := newAssetHandler()
-	if err != nil {
-		return nil, fmt.Errorf("create asset handler: %w", err)
-	}
-
 	return &handler{
 		pages:     createPages(),
 		renderer:  pageRenderer,
-		assets:    assetHandler,
 		slowDelay: config.SlowDelay,
 	}, nil
 }
@@ -49,11 +41,6 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			text:  "Этот тестовый сервер принимает только GET и HEAD-запросы.",
 			links: []link{{label: "Вернуться на старт", href: "/index.html"}},
 		})
-		return
-	}
-
-	if strings.HasPrefix(r.URL.Path, "/assets/") {
-		h.assets.ServeHTTP(w, r)
 		return
 	}
 

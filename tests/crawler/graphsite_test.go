@@ -36,13 +36,9 @@ func TestCrawlCurrentGraphSiteAtDepthThree(t *testing.T) {
 		"/a.html",
 		"/b.html",
 		"/c.html",
-		"/assets/pdf/b.pdf",
-		"/assets/pdf/a.pdf",
 		"/depth-1.html",
 		"/depth-2.html",
 		"/depth-3.html",
-		"/assets/images/depth-2.jpg",
-		"/assets/images/depth-1.png",
 		"/hub.html",
 		"/redirect-once",
 		"/redirect-chain/start",
@@ -54,17 +50,17 @@ func TestCrawlCurrentGraphSiteAtDepthThree(t *testing.T) {
 	if got := requests.snapshot(); !reflect.DeepEqual(got, wantOrder) {
 		t.Fatalf("request order =\n%v\nwant strict DFS order =\n%v", got, wantOrder)
 	}
-	if result.PagesChecked != 18 {
-		t.Fatalf("pages checked = %d, want 18 unique HTTP URLs", result.PagesChecked)
+	if result.PagesChecked != 14 {
+		t.Fatalf("pages checked = %d, want 14 unique HTTP URLs", result.PagesChecked)
 	}
-	if len(result.Pages) != 17 {
-		t.Fatalf("logical DFS results = %d, want 17", len(result.Pages))
+	if len(result.Pages) != 13 {
+		t.Fatalf("logical DFS results = %d, want 13", len(result.Pages))
 	}
-	if result.LinksDiscovered != 27 {
-		t.Fatalf("links discovered = %d, want 27 without cached-document duplicates", result.LinksDiscovered)
+	if result.LinksDiscovered != 23 {
+		t.Fatalf("links discovered = %d, want 23 without cached-document duplicates", result.LinksDiscovered)
 	}
-	if len(result.SourcesByURL) != 19 {
-		t.Fatalf("unique normalized target URLs = %d, want 19", len(result.SourcesByURL))
+	if len(result.SourcesByURL) != 15 {
+		t.Fatalf("unique normalized target URLs = %d, want 15", len(result.SourcesByURL))
 	}
 	if result.MaxPagesReached {
 		t.Fatal("MaxPagesReached = true, want false")
@@ -75,7 +71,7 @@ func TestCrawlCurrentGraphSiteAtDepthThree(t *testing.T) {
 		resultCounts[page.ResultKind]++
 	}
 	wantResultCounts := map[crawler.ResultKind]int{
-		crawler.ResultSuccess:       15,
+		crawler.ResultSuccess:       11,
 		crawler.ResultRedirect:      0,
 		crawler.ResultRedirectError: 0,
 		crawler.ResultHTTP4XX:       1,
@@ -113,9 +109,9 @@ func TestCrawlCurrentGraphSiteAtDepthThree(t *testing.T) {
 	}
 
 	internalLinks, externalLinks := linkKindCounts(result)
-	if internalLinks != 26 || externalLinks != 1 {
+	if internalLinks != 22 || externalLinks != 1 {
 		t.Fatalf(
-			"link occurrences = %d internal and %d external, want 26 and 1",
+			"link occurrences = %d internal and %d external, want 22 and 1",
 			internalLinks,
 			externalLinks,
 		)

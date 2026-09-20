@@ -21,10 +21,18 @@ func newScope(startURL *url.URL) scope {
 }
 
 func (s scope) contains(target *url.URL) bool {
-	return target != nil &&
-		strings.EqualFold(target.Scheme, s.scheme) &&
-		strings.EqualFold(target.Hostname(), s.hostname) &&
-		effectivePort(target) == s.port
+	if target == nil || !strings.EqualFold(target.Hostname(), s.hostname) {
+		return false
+	}
+
+	targetScheme := strings.ToLower(target.Scheme)
+	targetPort := effectivePort(target)
+	if targetScheme == s.scheme {
+		return targetPort == s.port
+	}
+
+	return s.scheme == "http" && targetScheme == "https" &&
+		((s.port == 80 && targetPort == 443) || targetPort == s.port)
 }
 
 func effectivePort(target *url.URL) int {

@@ -22,6 +22,7 @@ func (i *Inspector) Crawl(ctx context.Context) (result CrawlResult, err error) {
 		MaxPages:     i.config.MaxPages,
 		MaxRedirects: i.config.MaxRedirects,
 		Concurrency:  i.config.Concurrency,
+		MaxHTMLBytes: i.config.MaxHTMLBytes,
 		DepthByURL:   map[string]int{i.startURL.String(): 0},
 		SourcesByURL: make(map[string][]string),
 	}

@@ -61,6 +61,7 @@ func TestRunPrintsFinalDFSReport(t *testing.T) {
 		"Maximum pages:      2",
 		"Maximum redirects:  10",
 		"Concurrency:        1",
+		"Maximum HTML bytes: 2097152",
 		"Elapsed:",
 		"Max pages reached:  true",
 		"Pages checked:      2",
@@ -91,6 +92,8 @@ func TestRunRejectsInvalidConfiguration(t *testing.T) {
 		{name: "negative redirects", args: []string{"--url", "http://example.com", "--max-redirects", "-1"}},
 		{name: "zero concurrency", args: []string{"--url", "http://example.com", "--concurrency", "0"}},
 		{name: "negative concurrency", args: []string{"--url", "http://example.com", "--concurrency", "-1"}},
+		{name: "negative HTML limit", args: []string{"--url", "http://example.com", "--max-html-bytes", "-1"}},
+		{name: "zero HTML limit", args: []string{"--url", "http://example.com", "--max-html-bytes", "0"}},
 	}
 
 	for _, test := range tests {
@@ -233,7 +236,9 @@ func TestRunPrintsHTTPResultSummaryAndProblemSources(t *testing.T) {
 		"Redirect hops:      1",
 		"Broken links:       2",
 		"HTTP 4xx:           1",
+		"HTTP 404:           1",
 		"HTTP 5xx:           1",
+		"HTTP 500:           1",
 		"Timeouts:           0",
 		"Network errors:     0",
 		"Result: HTTP_4XX\nStatus: 404 Not Found",
@@ -244,6 +249,115 @@ func TestRunPrintsHTTPResultSummaryAndProblemSources(t *testing.T) {
 		server.URL + "/ok — 200 OK",
 		"Final result: SUCCESS",
 		"Found on:\n- " + server.URL + "/",
+	} {
+		if !strings.Contains(stdout.String(), expected) {
+			t.Errorf("report does not contain %q:\n%s", expected, stdout.String())
+		}
+	}
+}
+
+func TestRunPrintsSpecificHTTPStatusCountsInOrder(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		switch r.URL.Path {
+		case "/":
+			fmt.Fprint(w,
+				`<a href="/status-503">503</a>`,
+				`<a href="/status-413-a">413 A</a>`,
+				`<a href="/status-404-a">404 A</a>`,
+				`<a href="/status-500">500</a>`,
+				`<a href="/status-413-b">413 B</a>`,
+				`<a href="/status-404-b">404 B</a>`,
+			)
+		case "/status-404-a", "/status-404-b":
+			w.WriteHeader(http.StatusNotFound)
+		case "/status-413-a", "/status-413-b":
+			w.WriteHeader(http.StatusRequestEntityTooLarge)
+		case "/status-500":
+			w.WriteHeader(http.StatusInternalServerError)
+		case "/status-503":
+			w.WriteHeader(http.StatusServiceUnavailable)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := crawlercli.Run(
+		context.Background(),
+		[]string{
+			"--url", server.URL + "/",
+			"--depth", "1",
+			"--max-pages", "20",
+			"--concurrency", "4",
+			"--timeout", "1s",
+		},
+		&stdout,
+		&stderr,
+	)
+	if exitCode != 0 {
+		t.Fatalf("Run exit code = %d, stderr = %q", exitCode, stderr.String())
+	}
+
+	report := stdout.String()
+	wantInOrder := []string{
+		"Broken links:       6",
+		"HTTP 4xx:           4",
+		"HTTP 404:           2",
+		"HTTP 413:           2",
+		"HTTP 5xx:           2",
+		"HTTP 500:           1",
+		"HTTP 503:           1",
+		"Timeouts:           0",
+	}
+	lastPosition := -1
+	for _, expected := range wantInOrder {
+		position := strings.Index(report, expected)
+		if position < 0 {
+			t.Fatalf("report does not contain %q:\n%s", expected, report)
+		}
+		if position <= lastPosition {
+			t.Fatalf("%q is out of order in report:\n%s", expected, report)
+		}
+		lastPosition = position
+	}
+}
+
+func TestRunReportsHTMLBodyLimit(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprint(w, `<a href="/must-not-be-crawled">hidden</a>`+strings.Repeat("x", 128))
+	}))
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := crawlercli.Run(
+		context.Background(),
+		[]string{
+			"--url", server.URL + "/",
+			"--depth", "1",
+			"--max-pages", "10",
+			"--max-html-bytes", "32",
+			"--concurrency", "1",
+			"--timeout", "1s",
+		},
+		&stdout,
+		&stderr,
+	)
+	if exitCode != 0 {
+		t.Fatalf("Run exit code = %d, stderr = %q", exitCode, stderr.String())
+	}
+
+	for _, expected := range []string{
+		"Maximum HTML bytes: 32",
+		"Pages checked:      1",
+		"Broken links:       1",
+		"HTML too large:     1",
+		"Result: HTML_TOO_LARGE",
+		"exceeds limit of 32 bytes",
 	} {
 		if !strings.Contains(stdout.String(), expected) {
 			t.Errorf("report does not contain %q:\n%s", expected, stdout.String())

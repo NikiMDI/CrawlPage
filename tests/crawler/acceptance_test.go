@@ -53,17 +53,17 @@ func TestFinalAcceptanceAgainstGraphSite(t *testing.T) {
 	if result.Elapsed <= 0 {
 		t.Fatal("elapsed time was not recorded")
 	}
-	if result.PagesChecked != 18 {
-		t.Fatalf("pages checked = %d, want 18 unique HTTP URLs", result.PagesChecked)
+	if result.PagesChecked != 14 {
+		t.Fatalf("pages checked = %d, want 14 unique HTTP URLs", result.PagesChecked)
 	}
-	if len(result.Pages) != 17 {
-		t.Fatalf("logical page results = %d, want 17", len(result.Pages))
+	if len(result.Pages) != 13 {
+		t.Fatalf("logical page results = %d, want 13", len(result.Pages))
 	}
-	if result.LinksDiscovered != 26 {
-		t.Fatalf("links discovered = %d, want 26", result.LinksDiscovered)
+	if result.LinksDiscovered != 22 {
+		t.Fatalf("links discovered = %d, want 22", result.LinksDiscovered)
 	}
-	if len(result.SourcesByURL) != 19 {
-		t.Fatalf("unique normalized link targets = %d, want 19", len(result.SourcesByURL))
+	if len(result.SourcesByURL) != 15 {
+		t.Fatalf("unique normalized link targets = %d, want 15", len(result.SourcesByURL))
 	}
 	if result.MaxPagesReached {
 		t.Fatal("max-pages was unexpectedly reached")
@@ -74,7 +74,7 @@ func TestFinalAcceptanceAgainstGraphSite(t *testing.T) {
 		resultCounts[page.ResultKind]++
 	}
 	wantResultCounts := map[crawler.ResultKind]int{
-		crawler.ResultSuccess:       14,
+		crawler.ResultSuccess:       10,
 		crawler.ResultHTTP4XX:       1,
 		crawler.ResultHTTP5XX:       1,
 		crawler.ResultTimeout:       1,
@@ -119,9 +119,9 @@ func TestFinalAcceptanceAgainstGraphSite(t *testing.T) {
 	}
 
 	internalLinks, externalLinks := linkKindCounts(result)
-	if internalLinks != 25 || externalLinks != 1 {
+	if internalLinks != 21 || externalLinks != 1 {
 		t.Fatalf(
-			"link occurrences = %d internal and %d external, want 25 and 1",
+			"link occurrences = %d internal and %d external, want 21 and 1",
 			internalLinks,
 			externalLinks,
 		)
@@ -142,18 +142,6 @@ func TestFinalAcceptanceAgainstGraphSite(t *testing.T) {
 		server.URL + "/a.html",
 		server.URL + "/b.html",
 	})
-
-	for _, assetPath := range []string{
-		"/assets/pdf/a.pdf",
-		"/assets/pdf/b.pdf",
-		"/assets/images/depth-1.png",
-		"/assets/images/depth-2.jpg",
-	} {
-		asset := findPage(t, result, server.URL+assetPath)
-		if asset.ResultKind != crawler.ResultSuccess || asset.HTMLParsed {
-			t.Errorf("asset %s = %+v, want non-HTML SUCCESS", assetPath, asset)
-		}
-	}
 
 	requestedPaths := requests.snapshot()
 	for _, path := range []string{"/a.html", "/b.html", "/c.html"} {

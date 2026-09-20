@@ -63,15 +63,6 @@ curl.exe -s -L -o NUL -w "status=%{http_code}; redirects=%{num_redirects}; final
 status=200; redirects=2; final=http://127.0.0.1:8080/c.html
 ```
 
-### Статические файлы
-
-```powershell
-curl.exe -s -o NUL -w "image=%{http_code} %{content_type}`n" "$base/assets/images/depth-1.png"
-curl.exe -s -o NUL -w "pdf=%{http_code} %{content_type}`n" "$base/assets/pdf/a.pdf"
-```
-
-Оба файла должны вернуть `200`. Изображение должно иметь тип `image/png`, PDF — `application/pdf`.
-
 ## Набор 2. Полный успешный обход графа
 
 ```powershell
@@ -81,7 +72,8 @@ go run ./cmd/crawler `
   --max-pages 100 `
   --max-redirects 10 `
   --concurrency 4 `
-  --timeout "300ms"
+  --timeout "300ms" `
+  --max-html-bytes 2097152
 ```
 
 При `slow-delay=1s` и `timeout=300ms` основные значения первого уровня должны быть следующими:
@@ -89,17 +81,19 @@ go run ./cmd/crawler `
 ```text
 Maximum depth:      3
 Max pages reached:  false
-Pages checked:      18
-Links discovered:   26
-Unique HTTP links:  19
-Internal links:     25
+Pages checked:      14
+Links discovered:   22
+Unique HTTP links:  15
+Internal links:     21
 External links:     1
-Successful:         14
+Successful:         10
 Redirect chains:    2
 Redirect hops:      3
 Broken links:       3
 HTTP 4xx:           1
+HTTP 404:           1
 HTTP 5xx:           1
+HTTP 500:           1
 Timeouts:           1
 ```
 
@@ -112,9 +106,8 @@ Timeouts:           1
 - `/redirect-chain/start`: два перехода `302`, затем `200 OK` на `/c.html`;
 - строку `[EXTERNAL]` для `https://example.com/`;
 - ссылки на `/hub.html` со страниц `/index.html`, `/a.html` и `/b.html`;
-- PDF и изображения с результатом `SUCCESS`, но без извлечения ссылок из их содержимого.
 
-Значение `Pages checked` равно `18`, потому что промежуточный URL `/redirect-chain/middle` тоже является отдельным HTTP-запросом. В отчёте redirect-цепочка при этом представлена как один логический результат исходной ссылки.
+Значение `Pages checked` равно `14`, причём промежуточный URL `/redirect-chain/middle` тоже является отдельным HTTP-запросом. В отчёте redirect-цепочка при этом представлена как один логический результат исходной ссылки.
 
 ## Набор 3. Timeout и успешный медленный ответ
 
@@ -124,7 +117,7 @@ Timeouts:           1
 go run ./cmd/crawler --url "$base/index.html" --depth 3 --max-pages 100 --max-redirects 10 --concurrency 4 --timeout "300ms"
 ```
 
-Ожидается `Timeouts: 1`, `Broken links: 3`, `Successful: 14`.
+Ожидается `Timeouts: 1`, `Broken links: 3`, `Successful: 10`.
 
 Timeout больше задержки сервера:
 
@@ -132,7 +125,7 @@ Timeout больше задержки сервера:
 go run ./cmd/crawler --url "$base/index.html" --depth 3 --max-pages 100 --max-redirects 10 --concurrency 4 --timeout "2s"
 ```
 
-Ожидается `Timeouts: 0`, `Broken links: 2`, `Successful: 15`. После успешной загрузки `/slow.html` crawler дополнительно извлечёт её ссылку, поэтому `Links discovered` увеличится с `26` до `27`.
+Ожидается `Timeouts: 0`, `Broken links: 2`, `Successful: 11`. После успешной загрузки `/slow.html` crawler дополнительно извлечёт её ссылку, поэтому `Links discovered` увеличится с `22` до `23`.
 
 ## Набор 4. Ограничение глубины
 
@@ -142,7 +135,7 @@ go run ./cmd/crawler --url "$base/index.html" --depth 3 --max-pages 100 --max-re
 go run ./cmd/crawler --url "$base/index.html" --depth 3 --max-pages 100 --max-redirects 10 --concurrency 4 --timeout "300ms"
 ```
 
-Ссылка `/deep-target.html` будет обнаружена на глубине `4`, но отдельного блока `PAGE` для неё не будет. Ожидается `Pages checked: 18`.
+Ссылка `/deep-target.html` будет обнаружена на глубине `4`, но отдельного блока `PAGE` для неё не будет. Ожидается `Pages checked: 14`.
 
 Затем разрешите глубину `4`:
 
@@ -153,9 +146,9 @@ go run ./cmd/crawler --url "$base/index.html" --depth 4 --max-pages 100 --max-re
 Теперь `/deep-target.html` должна появиться как проверенная страница с `Depth: 4` и `Result: SUCCESS`. Ожидается:
 
 ```text
-Pages checked:      19
-Links discovered:   27
-Successful:         15
+Pages checked:      15
+Links discovered:   23
+Successful:         11
 ```
 
 Граница включительная: при `--depth 3` обрабатываются глубины `0`, `1`, `2`, `3`; глубина `4` только обнаруживается.
@@ -281,10 +274,29 @@ Redirect-цепочка со всеми промежуточными стату�
 go test -count=1 -v -run '^TestRedirectChainKeepsEveryHopAndFinalResult$' ./tests/crawler
 ```
 
-Нормализация относительных URL и правило same-origin:
+Нормализация относительных URL и правило scope с HTTP→HTTPS upgrade:
 
 ```powershell
-go test -count=1 -v -run '^(TestNormalizeURLRulesThroughPublicAPI|TestScopeUsesSchemeHostnameAndEffectivePortThroughPublicAPI)$' ./tests/crawler
+go test -count=1 -v -run '^(TestNormalizeURLRulesThroughPublicAPI|TestScopeAllowsSafeHTTPSUpgradeThroughPublicAPI)$' ./tests/crawler
+```
+
+Продолжение обхода после redirect с HTTP на HTTPS:
+
+```powershell
+go test -count=1 -v -run '^TestHTTPRedirectUpgradeToHTTPSStaysInScopeAndContinuesCrawl$' ./tests/crawler
+```
+
+Детализация `404`, `413`, `500` и `503` в сводке:
+
+```powershell
+go test -count=1 -v -run '^TestRunPrintsSpecificHTTPStatusCountsInOrder$' ./tests/crawlercli
+```
+
+Ограничение HTML как для ответа с точным размером, так и для chunked body без `Content-Length`:
+
+```powershell
+go test -count=1 -v -run '^TestHTMLBodyLimitAcceptsExactSizeAndRejectsLargerChunkedBody$' ./tests/crawler
+go test -count=1 -v -run '^TestRunReportsHTMLBodyLimit$' ./tests/crawlercli
 ```
 
 Сетевая ошибка без остановки остального обхода:
@@ -320,4 +332,3 @@ go test -race ./...
 5. тест фактической конкурентности;
 6. ручную остановку через `Ctrl+C`;
 7. `go test -count=1 ./...` и `go test -race ./...`.
-

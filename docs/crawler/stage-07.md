@@ -85,7 +85,6 @@ timeout     < slow-delay
 - одну внешнюю ссылку без внешнего HTTP-запроса;
 - несколько источников `/hub.html`;
 - обнаружение `/deep-target.html` на глубине 4 без запроса при лимите 3;
-- успешную проверку PDF и изображений без разбора их как HTML;
 - ненулевой `Elapsed`;
 - соблюдение лимитов и отсутствие повторных HTTP-запросов.
 
@@ -97,12 +96,13 @@ timeout     < slow-delay
 |---|---|---|
 | Внутренний граф | `scheduler.go`, `DepthByURL` | `crawl_test.go`, `graphsite_test.go` |
 | Нормализация URL | `normalize.go` | `normalize_test.go` |
-| Same-origin | `scope.go` | `normalize_test.go`, `crawl_test.go` |
+| Same-scope и HTTP→HTTPS upgrade | `scope.go` | `normalize_test.go`, `redirect_test.go` |
 | Максимальная глубина | `scheduler.expand` | `crawl_test.go`, `acceptance_test.go` |
 | `max-pages` | `crawlSession.fetch` | `crawl_test.go`, `concurrency_test.go` |
 | Конкурентность | fixed worker pool | `concurrency_test.go` |
 | Повторные URL и циклы | scheduler + fetch cache | `crawl_test.go`, `concurrency_test.go` |
-| 4xx/5xx/network/timeout | `classify.go`, `fetch.go` | `results_test.go`, `acceptance_test.go` |
+| 4xx/5xx с детализацией, network/timeout | `classify.go`, `fetch.go`, CLI | `results_test.go`, CLI tests |
+| Ограничение HTML body | `fetch.go`, `MaxHTMLBytes` | `results_test.go`, CLI tests |
 | Redirect-цепочки | `inspectURL` | `redirect_test.go`, `acceptance_test.go` |
 | Внешние ссылки | `scope.contains` | `crawl_test.go`, `acceptance_test.go` |
 | Источники проблем | `recordSources` | `results_test.go`, `acceptance_test.go` |

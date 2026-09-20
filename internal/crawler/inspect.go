@@ -61,6 +61,7 @@ type CrawlResult struct {
 	MaxPages        int
 	MaxRedirects    int
 	Concurrency     int
+	MaxHTMLBytes    int64
 	Elapsed         time.Duration
 	PagesChecked    int
 	Pages           []PageResult
@@ -79,6 +80,7 @@ type Inspector struct {
 }
 
 func New(config Config) (*Inspector, error) {
+	config = config.withDefaults()
 	startURL, err := validateConfig(config)
 	if err != nil {
 		return nil, err

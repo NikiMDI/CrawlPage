@@ -375,15 +375,15 @@ func TestPageLimitStillAllowsCachedRedirectTarget(t *testing.T) {
 	}
 }
 
-func TestCrawlChecksNonHTMLWithoutParsingIt(t *testing.T) {
+func TestCrawlChecksBinaryContentWithoutParsingIt(t *testing.T) {
 	var requests requestRecorder
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests.add(r.URL.Path)
 		switch r.URL.Path {
 		case "/":
-			writeTestHTML(w, `<a href="/document.pdf">PDF</a>`)
-		case "/document.pdf":
-			w.Header().Set("Content-Type", "application/pdf")
+			writeTestHTML(w, `<a href="/binary">Binary</a>`)
+		case "/binary":
+			w.Header().Set("Content-Type", "application/octet-stream")
 			fmt.Fprint(w, `<a href="/must-not-be-requested">Fake HTML link</a>`)
 		default:
 			http.NotFound(w, r)
@@ -397,12 +397,12 @@ func TestCrawlChecksNonHTMLWithoutParsingIt(t *testing.T) {
 		t.Fatalf("Crawl: %v", err)
 	}
 
-	wantOrder := []string{"/", "/document.pdf"}
+	wantOrder := []string{"/", "/binary"}
 	if got := requests.snapshot(); !reflect.DeepEqual(got, wantOrder) {
 		t.Fatalf("request order = %v, want %v", got, wantOrder)
 	}
 	if _, exists := result.SourcesByURL[server.URL+"/must-not-be-requested"]; exists {
-		t.Fatal("link-like text from a PDF must not be parsed as HTML")
+		t.Fatal("link-like text from binary content must not be parsed as HTML")
 	}
 }
 

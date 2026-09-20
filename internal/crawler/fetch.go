@@ -121,14 +121,35 @@ func (i *Inspector) fetchURL(ctx context.Context, target *url.URL) (fetchedURL, 
 	if result.ResultKind != ResultSuccess || !isHTMLContentType(result.ContentType) {
 		return result, nil
 	}
+	if response.ContentLength > i.config.MaxHTMLBytes {
+		result.ResultKind = ResultHTMLTooLarge
+		result.Error = fmt.Sprintf(
+			"HTML response from %s exceeds limit of %d bytes",
+			target,
+			i.config.MaxHTMLBytes,
+		)
+		return result, nil
+	}
 
-	body, readErr := io.ReadAll(response.Body)
+	body, readErr := io.ReadAll(io.LimitReader(
+		response.Body,
+		i.config.MaxHTMLBytes+1,
+	))
 	if readErr != nil {
 		if parentErr := ctx.Err(); parentErr != nil {
 			return fetchedURL{}, parentErr
 		}
 		result.ResultKind = classifyRequestError(readErr)
 		result.Error = fmt.Sprintf("read %s: %v", target, readErr)
+		return result, nil
+	}
+	if int64(len(body)) > i.config.MaxHTMLBytes {
+		result.ResultKind = ResultHTMLTooLarge
+		result.Error = fmt.Sprintf(
+			"HTML response from %s exceeds limit of %d bytes",
+			target,
+			i.config.MaxHTMLBytes,
+		)
 		return result, nil
 	}
 

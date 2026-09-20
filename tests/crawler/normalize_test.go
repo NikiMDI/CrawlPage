@@ -87,7 +87,7 @@ func TestNormalizeURLRulesThroughPublicAPI(t *testing.T) {
 	}
 }
 
-func TestScopeUsesSchemeHostnameAndEffectivePortThroughPublicAPI(t *testing.T) {
+func TestScopeAllowsSafeHTTPSUpgradeThroughPublicAPI(t *testing.T) {
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		parsedServerURL, err := url.Parse(server.URL)
@@ -106,7 +106,8 @@ func TestScopeUsesSchemeHostnameAndEffectivePortThroughPublicAPI(t *testing.T) {
 		w.Header().Set("Content-Type", "text/html; charset=UTF-8")
 		fmt.Fprintf(w, `<a href="%s/about">same origin</a>`, server.URL)
 		fmt.Fprintf(w, `<a href="http://%s:%d/about">other port</a>`, parsedServerURL.Hostname(), otherPort)
-		fmt.Fprintf(w, `<a href="https://%s/about">other scheme</a>`, parsedServerURL.Host)
+		fmt.Fprintf(w, `<a href="https://%s/about">HTTPS upgrade on same custom port</a>`, parsedServerURL.Host)
+		fmt.Fprintf(w, `<a href="https://%s:%d/about">HTTPS on other port</a>`, parsedServerURL.Hostname(), otherPort)
 		fmt.Fprint(w, `<a href="http://example.invalid/about">other hostname</a>`)
 	}))
 	defer server.Close()
@@ -116,16 +117,49 @@ func TestScopeUsesSchemeHostnameAndEffectivePortThroughPublicAPI(t *testing.T) {
 	if err != nil {
 		t.Fatalf("InspectStart: %v", err)
 	}
-	if len(page.Links) != 4 {
-		t.Fatalf("links = %d, want 4", len(page.Links))
+	if len(page.Links) != 5 {
+		t.Fatalf("links = %d, want 5", len(page.Links))
 	}
 	if page.Links[0].Kind != crawler.LinkInternal {
 		t.Errorf("same-origin link kind = %s, want INTERNAL", page.Links[0].Kind)
 	}
-	for _, link := range page.Links[1:] {
+	if page.Links[2].Kind != crawler.LinkInternal {
+		t.Errorf("HTTPS upgrade link kind = %s, want INTERNAL", page.Links[2].Kind)
+	}
+	for _, link := range []crawler.DiscoveredLink{page.Links[1], page.Links[3], page.Links[4]} {
 		if link.Kind != crawler.LinkExternal {
 			t.Errorf("link %q kind = %s, want EXTERNAL", link.RawHref, link.Kind)
 		}
+	}
+}
+
+func TestScopeDoesNotAllowHTTPSDowngrade(t *testing.T) {
+	var server *httptest.Server
+	server = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		serverURL, err := url.Parse(server.URL)
+		if err != nil {
+			t.Fatalf("parse test server URL: %v", err)
+		}
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprintf(
+			w,
+			`<a href="http://%s/plain">downgrade</a>`,
+			serverURL.Host,
+		)
+	}))
+	defer server.Close()
+
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = server.Client().Transport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+
+	inspector := newTestInspector(t, server.URL+"/secure", 0, 1, time.Second)
+	page, err := inspector.InspectStart(context.Background())
+	if err != nil {
+		t.Fatalf("InspectStart: %v", err)
+	}
+	if len(page.Links) != 1 || page.Links[0].Kind != crawler.LinkExternal {
+		t.Fatalf("downgrade links = %+v, want one EXTERNAL link", page.Links)
 	}
 }
 
@@ -164,6 +198,7 @@ func TestCrawlerConfigValidation(t *testing.T) {
 		{StartURL: "http://example.com", RequestTimeout: 1, MaxDepth: 1, MaxPages: 1, MaxRedirects: -1, Concurrency: 1},
 		{StartURL: "http://example.com", RequestTimeout: 1, MaxDepth: 1, MaxPages: 1, MaxRedirects: 10, Concurrency: 0},
 		{StartURL: "http://example.com", RequestTimeout: 1, MaxDepth: 1, MaxPages: 1, MaxRedirects: 10, Concurrency: -1},
+		{StartURL: "http://example.com", RequestTimeout: 1, MaxDepth: 1, MaxPages: 1, MaxRedirects: 10, Concurrency: 1, MaxHTMLBytes: -1},
 	}
 	for _, config := range tests {
 		if err := config.Validate(); err == nil {

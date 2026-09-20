@@ -34,7 +34,7 @@ go run ./cmd/graphsite -addr "127.0.0.1:9090" -slow-delay "7s"
 
 ```text
 SUCCESS, REDIRECT, HTTP_4XX, HTTP_5XX,
-TIMEOUT, NETWORK_ERROR, REDIRECT_ERROR, PAGE_LIMIT,
+TIMEOUT, NETWORK_ERROR, HTML_TOO_LARGE, REDIRECT_ERROR, PAGE_LIMIT,
 OTHER_HTTP_STATUS
 ```
 
@@ -45,7 +45,7 @@ go run ./cmd/graphsite --slow-delay "5s"
 В другом терминале:
 
 ```powershell
-go run ./cmd/crawler --url "http://127.0.0.1:8080/index.html" --depth 3 --max-pages 100 --max-redirects 10 --concurrency 4 --timeout "2s"
+go run ./cmd/crawler --url "http://127.0.0.1:8080/index.html" --depth 3 --max-pages 100 --max-redirects 10 --concurrency 4 --timeout "2s" --max-html-bytes 2097152
 ```
 
 Стандартное автоматическое следование redirect не используется. Crawler сам читает `Location`, разрешает относительный адрес через `net/url`, записывает каждый ответ `3xx`, обнаруживает цикл и соблюдает `--max-redirects`. Конечный HTML разбирается относительно конечного URL. Внешняя redirect-цель сохраняется, но не запрашивается.
@@ -58,17 +58,23 @@ Scheduler единолично управляет LIFO-стеком, глуби�
 
 `Ctrl+C` отменяет scheduler, workers и активные HTTP-запросы через общий `context.Context`. CLI завершается с кодом `130` и не печатает частичный отчёт. Успешный отчёт содержит `Elapsed` — время от входа в `Crawl` до завершения всех workers и сборки результата.
 
+HTML читается через `io.LimitReader`: по умолчанию не более 2 МиБ на ответ. Если сервер прислал больше, страница получает `HTML_TOO_LARGE`, усечённый документ не разбирается и его ссылки не попадают в очередь. Лимит меняется параметром `--max-html-bytes`.
+
+Сводка сохраняет общие счётчики `HTTP 4xx` и `HTTP 5xx`, а ниже показывает детальные счётчики для реально встретившихся кодов, например `HTTP 404`, `HTTP 413`, `HTTP 500`.
+
 Документация: [этап 5](docs/crawler/stage-05.md), [этап 6](docs/crawler/stage-06.md), [этап 7](docs/crawler/stage-07.md), [наборы демонстрационных проверок](docs/crawler/demo-checks.md), [памятка для защиты](docs/crawler/defense.md).
 
 ## Правило внутренней ссылки
 
-Ссылка считается внутренней, только если совпадают:
+Ссылка считается внутренней, если hostname совпадает и выполняется одно из правил:
 
 ```text
-scheme + hostname + effective port
+та же scheme + тот же effective port
+или безопасный upgrade HTTP:80 → HTTPS:443
+или HTTP → HTTPS на том же нестандартном порту
 ```
 
-Например, для `http://localhost:8080` адреса с HTTPS, другим портом или поддоменом считаются внешними.
+Это позволяет продолжить обход обычного redirect с `http://example.com` на `https://example.com`. Другой hostname и другой нестандартный порт считаются внешними. Если обход начат с HTTPS, переход на HTTP не разрешается.
 
 ## Сценарии тестового сайта
 
@@ -78,8 +84,6 @@ scheme + hostname + effective port
 - глубокая цепочка до `/deep-target.html`;
 - `404`, `500`, одиночный redirect и цепочка из двух redirects;
 - медленная страница и внешняя ссылка;
-- изображения на страницах глубины 1 и 2;
-- PDF-файлы, на которые ссылаются страницы A и B.
 
 ## Проверка
 
@@ -105,14 +109,6 @@ graph-test-site-go/
 │       └── main.go
 ├── internal/
 │   ├── site/
-│   │   ├── assets/
-│   │   │   ├── images/
-│   │   │   │   ├── depth-1.png
-│   │   │   │   └── depth-2.jpg
-│   │   │   └── pdf/
-│   │   │       ├── a.pdf
-│   │   │       └── b.pdf
-│   │   ├── assets.go
 │   │   ├── handler.go
 │   │   ├── pages.go
 │   │   └── render.go

@@ -56,7 +56,7 @@ start URL (depth 0)
 - повторный нормализованный URL запрашивается только один раз, но каждое найденное ребро и все разные страницы-источники остаются в результате;
 - пустой `href` разрешается в URL текущей страницы и потому не вызывает повторный запрос.
 
-Внутренней считается ссылка с той же схемой, тем же hostname и тем же эффективным портом, что у стартового URL. Например, для `http://example.com` адрес `http://example.com:80/about` внутренний, а `https://example.com/about`, `http://example.com:8080/about` и `http://other.example/about` — внешние. Ссылки других схем (`mailto:`, `javascript:` и подобные) пропускаются и сохраняются в списке `Skipped` с причиной.
+Внутренней считается ссылка с тем же hostname и тем же origin либо безопасным HTTP→HTTPS upgrade: стандартным `80→443` или на том же нестандартном порту. Поэтому `http://example.com` может продолжить обход на `https://example.com`, но другой hostname и другой нестандартный порт остаются внешними. Если стартовый URL использует HTTPS, переход на HTTP не разрешается. Ссылки других схем (`mailto:`, `javascript:` и подобные) пропускаются и сохраняются в списке `Skipped` с причиной.
 
 ## Состояние обхода
 
@@ -89,7 +89,7 @@ start URL (depth 0)
 `--max-pages` ограничивает количество уникальных внутренних HTTP(S)-адресов, для которых crawler начал проверку. В лимит входят:
 
 - HTML-страницы;
-- PDF и изображения из `<a href>`;
+- другие внутренние HTTP-ресурсы из `<a href>`, если они присутствуют;
 - ответы `3xx`, `4xx`, `5xx`;
 - попытки, завершившиеся сетевой ошибкой или timeout.
 
@@ -99,17 +99,17 @@ start URL (depth 0)
 
 ## Не-HTML ресурсы
 
-PDF и изображения внутри origin проверяются по HTTP и входят в `Pages checked`. Их содержимое не передаётся HTML-парсеру, поэтому текст, похожий на `<a href>`, внутри такого файла не создаёт новые рёбра.
+Если граф содержит ссылку на не-HTML ресурс, crawler проверяет его по HTTP, но не передаёт содержимое HTML-парсеру. В текущем демонстрационном сайте файловых ресурсов нет; поведение проверяется отдельным синтетическим тестом.
 
 ## Ожидаемый результат для тестового сайта
 
 При `--depth 3`, `--max-pages 100` и timeout больше задержки `/slow.html` ожидается:
 
 ```text
-Pages checked:      17
-Links discovered:   27
-Unique HTTP links:  19
-Internal links:     26
+Pages checked:      13
+Links discovered:   23
+Unique HTTP links:  15
+Internal links:     22
 External links:     1
 ```
 
@@ -122,19 +122,15 @@ External links:     1
  2. /a.html
  3. /b.html
  4. /c.html
- 5. /assets/pdf/b.pdf
- 6. /assets/pdf/a.pdf
- 7. /depth-1.html
- 8. /depth-2.html
- 9. /depth-3.html
-10. /assets/images/depth-2.jpg
-11. /assets/images/depth-1.png
-12. /hub.html
-13. /redirect-once
-14. /redirect-chain/start
-15. /slow.html
-16. /missing-page.html
-17. /server-error
+ 5. /depth-1.html
+ 6. /depth-2.html
+ 7. /depth-3.html
+ 8. /hub.html
+ 9. /redirect-once
+10. /redirect-chain/start
+11. /slow.html
+12. /missing-page.html
+13. /server-error
 ```
 
 ## Что пока намеренно не реализовано

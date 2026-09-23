@@ -77,7 +77,7 @@ func TestHTTPRedirectUpgradeToHTTPSStaysInScopeAndContinuesCrawl(t *testing.T) {
 			http.NotFound(w, r)
 			return
 		}
-		w.Header().Set("Location", "https://upgrade.test/secure")
+		w.Header().Set("Location", "https://upgrade.test:8443/secure")
 		w.WriteHeader(http.StatusMovedPermanently)
 	}))
 	defer plainServer.Close()
@@ -96,9 +96,9 @@ func TestHTTPRedirectUpgradeToHTTPSStaysInScopeAndContinuesCrawl(t *testing.T) {
 		address string,
 	) (net.Conn, error) {
 		switch address {
-		case "upgrade.test:80":
+		case "upgrade.test:8080":
 			address = plainServer.Listener.Addr().String()
-		case "upgrade.test:443":
+		case "upgrade.test:8443":
 			address = secureServer.Listener.Addr().String()
 		default:
 			return nil, fmt.Errorf("unexpected test address %s", address)
@@ -115,7 +115,7 @@ func TestHTTPRedirectUpgradeToHTTPSStaysInScopeAndContinuesCrawl(t *testing.T) {
 
 	inspector := newRedirectInspector(
 		t,
-		"http://upgrade.test/start",
+		"http://upgrade.test:8080/start",
 		1,
 		10,
 		time.Second,
@@ -126,18 +126,18 @@ func TestHTTPRedirectUpgradeToHTTPSStaysInScopeAndContinuesCrawl(t *testing.T) {
 		t.Fatalf("Crawl: %v", err)
 	}
 
-	startPage := findPage(t, result, "http://upgrade.test/start")
+	startPage := findPage(t, result, "http://upgrade.test:8080/start")
 	if startPage.ResultKind != crawler.ResultSuccess || startPage.RedirectedOutsideScope {
 		t.Fatalf("HTTP to HTTPS redirect result = %+v, want in-scope SUCCESS", startPage)
 	}
-	if startPage.FinalURL != "https://upgrade.test/secure" || len(startPage.RedirectChain) != 1 {
+	if startPage.FinalURL != "https://upgrade.test:8443/secure" || len(startPage.RedirectChain) != 1 {
 		t.Fatalf("redirect chain = %+v, final URL = %q", startPage.RedirectChain, startPage.FinalURL)
 	}
 	if startPage.RedirectChain[0].Status != "301 Moved Permanently" {
 		t.Fatalf("redirect status = %q, want 301", startPage.RedirectChain[0].Status)
 	}
 
-	nextPage := findPage(t, result, "https://upgrade.test/next")
+	nextPage := findPage(t, result, "https://upgrade.test:8443/next")
 	if nextPage.ResultKind != crawler.ResultSuccess || nextPage.Depth != 1 {
 		t.Fatalf("HTTPS child page = %+v, want depth-1 SUCCESS", nextPage)
 	}
@@ -350,9 +350,10 @@ func TestRedirectToExternalOriginIsRecordedButNotRequested(t *testing.T) {
 		writeTestHTML(w)
 	}))
 	defer external.Close()
+	externalURL := strings.Replace(external.URL, "127.0.0.1", "localhost", 1)
 
 	internal := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Location", external.URL+"/landing")
+		w.Header().Set("Location", externalURL+"/landing")
 		w.WriteHeader(http.StatusFound)
 	}))
 	defer internal.Close()
@@ -367,7 +368,7 @@ func TestRedirectToExternalOriginIsRecordedButNotRequested(t *testing.T) {
 	if page.ResultKind != crawler.ResultRedirect || !page.RedirectedOutsideScope {
 		t.Fatalf("external redirect result = %s, outside = %t", page.ResultKind, page.RedirectedOutsideScope)
 	}
-	if page.FinalURL != external.URL+"/landing" || externalRequests.Load() != 0 {
+	if page.FinalURL != externalURL+"/landing" || externalRequests.Load() != 0 {
 		t.Fatalf("external final/request count = %q / %d", page.FinalURL, externalRequests.Load())
 	}
 	if len(result.Problems) != 0 {
@@ -379,6 +380,45 @@ func TestRedirectToExternalOriginIsRecordedButNotRequested(t *testing.T) {
 			result.PagesChecked,
 			result.MaxPagesReached,
 		)
+	}
+}
+
+func TestRedirectToPDFIsRecordedButNotRequested(t *testing.T) {
+	var requests requestRecorder
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.add(r.URL.Path)
+		switch r.URL.Path {
+		case "/start":
+			w.Header().Set("Location", "/manual.PDF?download=1")
+			w.WriteHeader(http.StatusFound)
+		case "/manual.PDF":
+			w.WriteHeader(http.StatusInternalServerError)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	inspector := newRedirectInspector(t, server.URL+"/start", 0, 10, time.Second, 10)
+	result, err := inspector.Crawl(context.Background())
+	if err != nil {
+		t.Fatalf("Crawl: %v", err)
+	}
+
+	if got := requests.snapshot(); !reflect.DeepEqual(got, []string{"/start"}) {
+		t.Fatalf("requests = %v, PDF redirect target must not be requested", got)
+	}
+	page := findPage(t, result, server.URL+"/start")
+	if page.ResultKind != crawler.ResultRedirect ||
+		!page.RedirectTargetSkipped ||
+		!strings.Contains(page.RedirectSkipReason, "PDF") {
+		t.Fatalf("PDF redirect result = %+v", page)
+	}
+	if page.FinalURL != server.URL+"/manual.PDF?download=1" {
+		t.Fatalf("final URL = %q, want the skipped PDF target", page.FinalURL)
+	}
+	if result.PagesChecked != 1 {
+		t.Fatalf("pages checked = %d, want only the redirect source", result.PagesChecked)
 	}
 }
 

@@ -7,20 +7,36 @@ import (
 	"golang.org/x/net/html"
 )
 
-func extractHrefs(reader io.Reader) ([]string, error) {
+type extractedLinks struct {
+	BaseHref *string
+	Hrefs    []string
+}
+
+func extractLinks(reader io.Reader) (extractedLinks, error) {
 	document, err := html.Parse(reader)
 	if err != nil {
-		return nil, err
+		return extractedLinks{}, err
 	}
 
-	var hrefs []string
+	var result extractedLinks
 	var walk func(*html.Node)
 	walk = func(node *html.Node) {
-		if node.Type == html.ElementNode && strings.EqualFold(node.Data, "a") {
-			for _, attribute := range node.Attr {
-				if strings.EqualFold(attribute.Key, "href") {
-					hrefs = append(hrefs, attribute.Val)
-					break
+		if node.Type == html.ElementNode {
+			switch {
+			case strings.EqualFold(node.Data, "base") && result.BaseHref == nil:
+				for _, attribute := range node.Attr {
+					if strings.EqualFold(attribute.Key, "href") {
+						value := attribute.Val
+						result.BaseHref = &value
+						break
+					}
+				}
+			case strings.EqualFold(node.Data, "a"):
+				for _, attribute := range node.Attr {
+					if strings.EqualFold(attribute.Key, "href") {
+						result.Hrefs = append(result.Hrefs, attribute.Val)
+						break
+					}
 				}
 			}
 		}
@@ -31,5 +47,5 @@ func extractHrefs(reader io.Reader) ([]string, error) {
 	}
 	walk(document)
 
-	return hrefs, nil
+	return result, nil
 }

@@ -141,7 +141,7 @@ func writeReport(output io.Writer, result crawler.CrawlResult) {
 	writeHTTPStatusCounts(output, httpStatusCounts, 500, 599)
 	fmt.Fprintf(output, "Timeouts:           %d\n", resultCounts[crawler.ResultTimeout])
 	fmt.Fprintf(output, "Network errors:     %d\n", resultCounts[crawler.ResultNetworkError])
-	fmt.Fprintf(output, "HTML too large:     %d\n", resultCounts[crawler.ResultHTMLTooLarge])
+	fmt.Fprintf(output, "HTML too large:     %d\n", len(result.HTMLTooLarge))
 	fmt.Fprintf(output, "Other HTTP statuses: %d\n", resultCounts[crawler.ResultOtherHTTPStatus])
 
 	fmt.Fprintln(output)
@@ -238,6 +238,14 @@ func writeReport(output io.Writer, result crawler.CrawlResult) {
 					len(page.RedirectChain)+1,
 					page.FinalURL,
 				)
+			case page.RedirectTargetSkipped:
+				fmt.Fprintf(
+					output,
+					"%d. %s — SKIPPED (%s)\n",
+					len(page.RedirectChain)+1,
+					page.FinalURL,
+					page.RedirectSkipReason,
+				)
 			case page.RedirectCycleDetected:
 				fmt.Fprintf(
 					output,
@@ -291,23 +299,39 @@ func writeReport(output io.Writer, result crawler.CrawlResult) {
 	fmt.Fprintln(output, "Broken link details")
 	if len(result.Problems) == 0 {
 		fmt.Fprintln(output, "No broken links were found.")
+	} else {
+		for problemIndex, problem := range result.Problems {
+			fmt.Fprintln(output)
+			fmt.Fprintf(output, "PROBLEM %d\n", problemIndex+1)
+			writeProblem(output, problem)
+		}
+	}
+
+	fmt.Fprintln(output)
+	fmt.Fprintln(output, "HTML too large details")
+	if len(result.HTMLTooLarge) == 0 {
+		fmt.Fprintln(output, "No oversized HTML pages were found.")
 		return
 	}
 
-	for problemIndex, problem := range result.Problems {
+	for problemIndex, problem := range result.HTMLTooLarge {
 		fmt.Fprintln(output)
-		fmt.Fprintf(output, "PROBLEM %d\n", problemIndex+1)
-		fmt.Fprintf(output, "URL:    %s\n", problem.URL)
-		fmt.Fprintf(output, "Result: %s\n", problem.Kind)
-		if problem.Status != "" {
-			fmt.Fprintf(output, "Status: %s\n", problem.Status)
-		}
-		if problem.Error != "" {
-			fmt.Fprintf(output, "Error:  %s\n", problem.Error)
-		}
-		fmt.Fprintln(output, "Found on:")
-		writeSources(output, problem.Sources)
+		fmt.Fprintf(output, "HTML_TOO_LARGE %d\n", problemIndex+1)
+		writeProblem(output, problem)
 	}
+}
+
+func writeProblem(output io.Writer, problem crawler.Problem) {
+	fmt.Fprintf(output, "URL:    %s\n", problem.URL)
+	fmt.Fprintf(output, "Result: %s\n", problem.Kind)
+	if problem.Status != "" {
+		fmt.Fprintf(output, "Status: %s\n", problem.Status)
+	}
+	if problem.Error != "" {
+		fmt.Fprintf(output, "Error:  %s\n", problem.Error)
+	}
+	fmt.Fprintln(output, "Found on:")
+	writeSources(output, problem.Sources)
 }
 
 func formatElapsed(elapsed time.Duration) time.Duration {

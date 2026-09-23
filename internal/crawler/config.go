@@ -62,5 +62,8 @@ func validateConfig(config Config) (*url.URL, error) {
 	if err != nil {
 		return nil, fmt.Errorf("start URL: %w", err)
 	}
+	if isPDFURL(startURL) {
+		return nil, fmt.Errorf("start URL must not point to a PDF resource")
+	}
 	return startURL, nil
 }

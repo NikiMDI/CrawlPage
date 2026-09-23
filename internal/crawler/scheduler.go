@@ -187,13 +187,12 @@ func (s *crawlScheduler) expand(pagePosition int, depth int) {
 		if _, blocked := s.unavailable[discovered.URL]; blocked {
 			continue
 		}
-		if s.pageLimitReached && !childDone &&
-			!s.session.hasFetchEntry(discovered.URL) {
-			continue
-		}
-
 		childURL, err := url.Parse(discovered.URL)
 		if err != nil {
+			continue
+		}
+		if s.pageLimitReached && !childDone &&
+			!s.session.hasFetchEntry(discovered.URL) {
 			continue
 		}
 		children = append(children, crawlJob{URL: childURL, Depth: childDepth})

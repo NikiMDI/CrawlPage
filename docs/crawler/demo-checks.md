@@ -274,10 +274,10 @@ Redirect-цепочка со всеми промежуточными стату�
 go test -count=1 -v -run '^TestRedirectChainKeepsEveryHopAndFinalResult$' ./tests/crawler
 ```
 
-Нормализация относительных URL и правило scope с HTTP→HTTPS upgrade:
+Нормализация относительных URL и правило scope по hostname:
 
 ```powershell
-go test -count=1 -v -run '^(TestNormalizeURLRulesThroughPublicAPI|TestScopeAllowsSafeHTTPSUpgradeThroughPublicAPI)$' ./tests/crawler
+go test -count=1 -v -run '^(TestNormalizeURLRulesThroughPublicAPI|TestScopeUsesHostnameRegardlessOfSchemeOrPort)$' ./tests/crawler
 ```
 
 Продолжение обхода после redirect с HTTP на HTTPS:
@@ -297,6 +297,12 @@ go test -count=1 -v -run '^TestRunPrintsSpecificHTTPStatusCountsInOrder$' ./test
 ```powershell
 go test -count=1 -v -run '^TestHTMLBodyLimitAcceptsExactSizeAndRejectsLargerChunkedBody$' ./tests/crawler
 go test -count=1 -v -run '^TestRunReportsHTMLBodyLimit$' ./tests/crawlercli
+```
+
+Пропуск PDF без HTTP-запроса и разрешение ссылок через `<base href>`:
+
+```powershell
+go test -count=1 -v -run '^(TestPDFLinkIsSkippedWithoutHTTPRequest|TestRedirectToPDFIsRecordedButNotRequested|TestStartURLRejectsPDF|TestInspectStartResolvesLinksAgainstFirstBaseHref)$' ./tests/crawler
 ```
 
 Сетевая ошибка без остановки остального обхода:

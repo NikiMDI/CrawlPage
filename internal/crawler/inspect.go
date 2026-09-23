@@ -6,6 +6,7 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
+	"path"
 	"strings"
 	"time"
 )
@@ -48,6 +49,8 @@ type PageResult struct {
 	HTMLParsed             bool
 	RedirectChain          []RedirectHop
 	RedirectedOutsideScope bool
+	RedirectTargetSkipped  bool
+	RedirectSkipReason     string
 	RedirectCycleDetected  bool
 	StoppedByPageLimit     bool
 	LinksDiscovered        int
@@ -68,6 +71,7 @@ type CrawlResult struct {
 	DepthByURL      map[string]int
 	SourcesByURL    map[string][]string
 	Problems        []Problem
+	HTMLTooLarge    []Problem
 	LinksDiscovered int
 	MaxPagesReached bool
 }
@@ -177,6 +181,12 @@ func (i *Inspector) inspectURL(
 				result.RedirectedOutsideScope = true
 				return result, pageChecked, nil
 			}
+			if isPDFURL(nextURL) {
+				result.ResultKind = ResultRedirect
+				result.RedirectTargetSkipped = true
+				result.RedirectSkipReason = "PDF resources are not crawled"
+				return result, pageChecked, nil
+			}
 			if _, repeated := redirectURLs[nextURL.String()]; repeated {
 				result.ResultKind = ResultRedirectError
 				result.RedirectCycleDetected = true
@@ -214,9 +224,15 @@ func (i *Inspector) inspectURL(
 		}
 		result.HTMLParsed = true
 		result.LinksDiscovered = len(fetched.Hrefs)
+		linkBaseURL := currentURL
+		if fetched.BaseHref != nil {
+			if resolvedBase, baseErr := normalizeURL(currentURL, *fetched.BaseHref); baseErr == nil {
+				linkBaseURL = resolvedBase
+			}
+		}
 
 		for _, rawHref := range fetched.Hrefs {
-			linkTarget, normalizeErr := normalizeURL(currentURL, rawHref)
+			linkTarget, normalizeErr := normalizeURL(linkBaseURL, rawHref)
 			if normalizeErr != nil {
 				result.Skipped = append(result.Skipped, SkippedLink{
 					SourceURL: currentURL.String(),
@@ -225,10 +241,17 @@ func (i *Inspector) inspectURL(
 				})
 				continue
 			}
-
 			kind := LinkExternal
 			if i.scope.contains(linkTarget) {
 				kind = LinkInternal
+				if isPDFURL(linkTarget) {
+					result.Skipped = append(result.Skipped, SkippedLink{
+						SourceURL: currentURL.String(),
+						RawHref:   rawHref,
+						Reason:    "PDF resources are not crawled",
+					})
+					continue
+				}
 			}
 			result.Links = append(result.Links, DiscoveredLink{
 				SourceURL: currentURL.String(),
@@ -240,6 +263,10 @@ func (i *Inspector) inspectURL(
 
 		return result, pageChecked, nil
 	}
+}
+
+func isPDFURL(target *url.URL) bool {
+	return target != nil && strings.EqualFold(path.Ext(target.Path), ".pdf")
 }
 
 func isHTMLContentType(contentType string) bool {

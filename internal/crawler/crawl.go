@@ -51,6 +51,7 @@ func (i *Inspector) Crawl(ctx context.Context) (result CrawlResult, err error) {
 				scheduler.dispatchOrder[result.Pages[right].URL]
 		})
 		result.Problems = collectProblems(result.Pages, result.SourcesByURL)
+		result.HTMLTooLarge = collectHTMLTooLarge(result.Pages, result.SourcesByURL)
 		result.Elapsed = time.Since(startedAt)
 	}()
 
@@ -58,6 +59,27 @@ func (i *Inspector) Crawl(ctx context.Context) (result CrawlResult, err error) {
 		return result, err
 	}
 	return result, scheduler.run(workerContext)
+}
+
+func collectHTMLTooLarge(
+	pages []PageResult,
+	sourcesByURL map[string][]string,
+) []Problem {
+	oversized := make([]Problem, 0)
+	for _, page := range pages {
+		if page.ResultKind != ResultHTMLTooLarge {
+			continue
+		}
+
+		oversized = append(oversized, Problem{
+			URL:     page.URL,
+			Kind:    page.ResultKind,
+			Status:  page.Status,
+			Error:   page.Error,
+			Sources: append([]string(nil), sourcesByURL[page.URL]...),
+		})
+	}
+	return oversized
 }
 
 func collectProblems(pages []PageResult, sourcesByURL map[string][]string) []Problem {

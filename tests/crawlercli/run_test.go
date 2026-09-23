@@ -228,7 +228,6 @@ func TestRunPrintsHTTPResultSummaryAndProblemSources(t *testing.T) {
 	if exitCode != 0 {
 		t.Fatalf("Run exit code = %d, stderr = %q", exitCode, stderr.String())
 	}
-
 	for _, expected := range []string{
 		"Pages checked:      5",
 		"Successful:         3",
@@ -350,18 +349,24 @@ func TestRunReportsHTMLBodyLimit(t *testing.T) {
 	if exitCode != 0 {
 		t.Fatalf("Run exit code = %d, stderr = %q", exitCode, stderr.String())
 	}
-
 	for _, expected := range []string{
 		"Maximum HTML bytes: 32",
 		"Pages checked:      1",
-		"Broken links:       1",
+		"Broken links:       0",
 		"HTML too large:     1",
 		"Result: HTML_TOO_LARGE",
+		"Broken link details\nNo broken links were found.",
+		"HTML too large details",
+		"HTML_TOO_LARGE 1",
+		"Status: 200 OK",
 		"exceeds limit of 32 bytes",
 	} {
 		if !strings.Contains(stdout.String(), expected) {
 			t.Errorf("report does not contain %q:\n%s", expected, stdout.String())
 		}
+	}
+	if strings.Contains(stdout.String(), "PROBLEM 1\nURL:") {
+		t.Errorf("oversized HTML was incorrectly printed as a broken link:\n%s", stdout.String())
 	}
 }
 

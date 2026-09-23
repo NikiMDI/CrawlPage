@@ -24,7 +24,7 @@ const (
 func (kind ResultKind) IsBroken() bool {
 	switch kind {
 	case ResultRedirectError, ResultHTTP4XX, ResultHTTP5XX, ResultTimeout,
-		ResultNetworkError, ResultHTMLTooLarge:
+		ResultNetworkError:
 		return true
 	default:
 		return false

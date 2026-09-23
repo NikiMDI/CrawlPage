@@ -319,8 +319,12 @@ func TestHTMLBodyLimitAcceptsExactSizeAndRejectsLargerChunkedBody(t *testing.T) 
 		if got := requests.snapshot(); !reflect.DeepEqual(got, []string{"/"}) {
 			t.Fatalf("requests = %v, want only the oversized start page", got)
 		}
-		if len(result.Problems) != 1 || result.Problems[0].Kind != crawler.ResultHTMLTooLarge {
-			t.Fatalf("problems = %+v, want one HTML_TOO_LARGE", result.Problems)
+		if len(result.Problems) != 0 {
+			t.Fatalf("problems = %+v, oversized 200 HTML must not be broken", result.Problems)
+		}
+		if len(result.HTMLTooLarge) != 1 ||
+			result.HTMLTooLarge[0].Kind != crawler.ResultHTMLTooLarge {
+			t.Fatalf("oversized HTML = %+v, want one HTML_TOO_LARGE", result.HTMLTooLarge)
 		}
 	})
 }

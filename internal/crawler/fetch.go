@@ -16,6 +16,7 @@ type fetchedURL struct {
 	Error       string
 	ContentType string
 	Location    string
+	BaseHref    *string
 	Hrefs       []string
 }
 
@@ -153,11 +154,12 @@ func (i *Inspector) fetchURL(ctx context.Context, target *url.URL) (fetchedURL, 
 		return result, nil
 	}
 
-	hrefs, parseErr := extractHrefs(bytes.NewReader(body))
+	links, parseErr := extractLinks(bytes.NewReader(body))
 	if parseErr != nil {
 		return fetchedURL{}, fmt.Errorf("parse HTML from %s: %w", target, parseErr)
 	}
-	result.Hrefs = hrefs
+	result.BaseHref = links.BaseHref
+	result.Hrefs = links.Hrefs
 	return result, nil
 }
 

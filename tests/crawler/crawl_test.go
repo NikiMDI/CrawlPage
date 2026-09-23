@@ -40,6 +40,7 @@ func TestCrawlUsesDFSAndKeepsAllSources(t *testing.T) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	defer externalServer.Close()
+	externalURL := strings.Replace(externalServer.URL, "127.0.0.1", "localhost", 1)
 
 	var requests requestRecorder
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -49,7 +50,7 @@ func TestCrawlUsesDFSAndKeepsAllSources(t *testing.T) {
 			writeTestHTML(w,
 				`<a href="/a">A</a>`,
 				`<a href="/b">B</a>`,
-				fmt.Sprintf(`<a href="%s/outside">Outside</a>`, externalServer.URL),
+				fmt.Sprintf(`<a href="%s/outside">Outside</a>`, externalURL),
 			)
 		case "/a":
 			writeTestHTML(w,
@@ -403,6 +404,55 @@ func TestCrawlChecksBinaryContentWithoutParsingIt(t *testing.T) {
 	}
 	if _, exists := result.SourcesByURL[server.URL+"/must-not-be-requested"]; exists {
 		t.Fatal("link-like text from binary content must not be parsed as HTML")
+	}
+	if result.PagesChecked != 2 {
+		t.Fatalf("pages checked = %d, want both requested HTTP URLs", result.PagesChecked)
+	}
+}
+
+func TestPDFLinkIsSkippedWithoutHTTPRequest(t *testing.T) {
+	var requests requestRecorder
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.add(r.URL.Path)
+		switch r.URL.Path {
+		case "/":
+			writeTestHTML(w,
+				`<a href="/page">Page</a>`,
+				`<a href="/document.PDF?download=1">PDF</a>`,
+			)
+		case "/page":
+			writeTestHTML(w)
+		case "/document.PDF":
+			w.WriteHeader(http.StatusInternalServerError)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	inspector := newTestInspector(t, server.URL+"/", 1, 2, time.Second)
+	result, err := inspector.Crawl(context.Background())
+	if err != nil {
+		t.Fatalf("Crawl: %v", err)
+	}
+
+	wantRequests := []string{"/", "/page"}
+	if got := requests.snapshot(); !reflect.DeepEqual(got, wantRequests) {
+		t.Fatalf("requests = %v, want %v", got, wantRequests)
+	}
+	if result.PagesChecked != 2 {
+		t.Fatalf("pages checked = %d, want only the two requested HTML pages", result.PagesChecked)
+	}
+	root := findPage(t, result, server.URL+"/")
+	if len(root.Skipped) != 1 ||
+		root.Skipped[0].RawHref != "/document.PDF?download=1" ||
+		!strings.Contains(root.Skipped[0].Reason, "PDF") {
+		t.Fatalf("skipped links = %+v, want the PDF link", root.Skipped)
+	}
+	for _, page := range result.Pages {
+		if strings.Contains(strings.ToLower(page.URL), ".pdf") {
+			t.Fatalf("PDF unexpectedly appears in checked pages: %+v", page)
+		}
 	}
 }
 

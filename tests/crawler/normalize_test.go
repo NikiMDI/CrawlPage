@@ -87,7 +87,7 @@ func TestNormalizeURLRulesThroughPublicAPI(t *testing.T) {
 	}
 }
 
-func TestScopeAllowsSafeHTTPSUpgradeThroughPublicAPI(t *testing.T) {
+func TestScopeUsesHostnameRegardlessOfSchemeOrPort(t *testing.T) {
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		parsedServerURL, err := url.Parse(server.URL)
@@ -120,20 +120,19 @@ func TestScopeAllowsSafeHTTPSUpgradeThroughPublicAPI(t *testing.T) {
 	if len(page.Links) != 5 {
 		t.Fatalf("links = %d, want 5", len(page.Links))
 	}
-	if page.Links[0].Kind != crawler.LinkInternal {
-		t.Errorf("same-origin link kind = %s, want INTERNAL", page.Links[0].Kind)
+	for _, link := range page.Links[:4] {
+		if link.Kind != crawler.LinkInternal {
+			t.Errorf("same-host link %q kind = %s, want INTERNAL", link.RawHref, link.Kind)
+		}
 	}
-	if page.Links[2].Kind != crawler.LinkInternal {
-		t.Errorf("HTTPS upgrade link kind = %s, want INTERNAL", page.Links[2].Kind)
-	}
-	for _, link := range []crawler.DiscoveredLink{page.Links[1], page.Links[3], page.Links[4]} {
+	for _, link := range page.Links[4:] {
 		if link.Kind != crawler.LinkExternal {
-			t.Errorf("link %q kind = %s, want EXTERNAL", link.RawHref, link.Kind)
+			t.Errorf("other-host link %q kind = %s, want EXTERNAL", link.RawHref, link.Kind)
 		}
 	}
 }
 
-func TestScopeDoesNotAllowHTTPSDowngrade(t *testing.T) {
+func TestScopeAllowsHTTPAndHTTPSOnTheSameHostname(t *testing.T) {
 	var server *httptest.Server
 	server = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		serverURL, err := url.Parse(server.URL)
@@ -158,8 +157,8 @@ func TestScopeDoesNotAllowHTTPSDowngrade(t *testing.T) {
 	if err != nil {
 		t.Fatalf("InspectStart: %v", err)
 	}
-	if len(page.Links) != 1 || page.Links[0].Kind != crawler.LinkExternal {
-		t.Fatalf("downgrade links = %+v, want one EXTERNAL link", page.Links)
+	if len(page.Links) != 1 || page.Links[0].Kind != crawler.LinkInternal {
+		t.Fatalf("same-host HTTP link = %+v, want one INTERNAL link", page.Links)
 	}
 }
 
@@ -184,6 +183,20 @@ func TestStartURLCanonicalizationThroughCrawlResult(t *testing.T) {
 	}
 	if result.StartURL != "http://example.com/" {
 		t.Fatalf("normalized start URL = %q, want %q", result.StartURL, "http://example.com/")
+	}
+}
+
+func TestStartURLRejectsPDF(t *testing.T) {
+	_, err := crawler.New(crawler.Config{
+		StartURL:       "http://example.com/manual.PDF?download=1",
+		RequestTimeout: time.Second,
+		MaxDepth:       1,
+		MaxPages:       10,
+		MaxRedirects:   10,
+		Concurrency:    1,
+	})
+	if err == nil || !strings.Contains(err.Error(), "must not point to a PDF") {
+		t.Fatalf("New error = %v, want rejected PDF start URL", err)
 	}
 }
 

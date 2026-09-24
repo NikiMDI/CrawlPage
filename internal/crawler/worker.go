@@ -8,10 +8,10 @@ type crawlTask struct {
 }
 
 type crawlWorkerResult struct {
-	Task        crawlTask
-	Page        PageResult
-	PageChecked bool
-	Err         error
+	Task         crawlTask
+	Page         PageResult
+	PageAccepted bool
+	Err          error
 }
 
 func (i *Inspector) runWorker(
@@ -32,17 +32,17 @@ func (i *Inspector) runWorker(
 				return
 			}
 
-			page, pageChecked, err := i.inspectURL(
+			page, pageAccepted, err := i.inspectURL(
 				ctx,
 				task.Job.URL,
 				task.Job.Depth,
 				session,
 			)
 			workerResult := crawlWorkerResult{
-				Task:        task,
-				Page:        page,
-				PageChecked: pageChecked,
-				Err:         err,
+				Task:         task,
+				Page:         page,
+				PageAccepted: pageAccepted,
+				Err:          err,
 			}
 
 			select {

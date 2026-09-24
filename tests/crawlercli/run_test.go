@@ -53,7 +53,7 @@ func TestRunPrintsFinalDFSReport(t *testing.T) {
 	requestsMu.Lock()
 	gotRequests := append([]string(nil), requests...)
 	requestsMu.Unlock()
-	if wantRequests := []string{"/", "/a"}; !reflect.DeepEqual(gotRequests, wantRequests) {
+	if wantRequests := []string{"/", "/a", "/b"}; !reflect.DeepEqual(gotRequests, wantRequests) {
 		t.Fatalf("request order = %v, want DFS prefix %v", gotRequests, wantRequests)
 	}
 	for _, expected := range []string{
@@ -591,7 +591,7 @@ func TestRunReportsPageLimitInsideRedirectChain(t *testing.T) {
 		"Stopped by max-pages: 1",
 		"Broken links:       0",
 		"Result: PAGE_LIMIT",
-		server.URL + "/final — NOT REQUESTED (max-pages reached)",
+		server.URL + "/final — NOT PROCESSED (max-pages reached after response headers)",
 		"Final result: PAGE_LIMIT",
 	} {
 		if !strings.Contains(stdout.String(), expected) {

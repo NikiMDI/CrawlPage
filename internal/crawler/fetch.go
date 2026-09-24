@@ -21,9 +21,10 @@ type fetchedURL struct {
 }
 
 type fetchEntry struct {
-	ready  chan struct{}
-	result fetchedURL
-	err    error
+	ready     chan struct{}
+	result    fetchedURL
+	available bool
+	err       error
 }
 
 type crawlSession struct {
@@ -56,31 +57,49 @@ func (s *crawlSession) fetch(
 		s.mu.Unlock()
 		select {
 		case <-entry.ready:
-			return entry.result, true, entry.err
+			return entry.result, entry.available, entry.err
 		case <-ctx.Done():
 			return fetchedURL{}, true, ctx.Err()
 		}
 	}
-	if s.pagesChecked >= s.maxPages {
-		s.maxPagesReached = true
-		s.mu.Unlock()
-		return fetchedURL{}, false, nil
-	}
 
 	entry := &fetchEntry{ready: make(chan struct{})}
 	s.cache[key] = entry
-	s.pagesChecked++
 	s.mu.Unlock()
 
-	fetched, err := inspector.fetchURL(ctx, target)
+	fetched, available, err := inspector.fetchURL(ctx, target, s.admit)
 
 	s.mu.Lock()
 	entry.result = fetched
+	entry.available = available
 	entry.err = err
 	close(entry.ready)
 	s.mu.Unlock()
 
-	return fetched, true, err
+	return fetched, available, err
+}
+
+func (s *crawlSession) admit(result fetchedURL) bool {
+	// A successful non-HTML resource is still checked for its HTTP status, but it
+	// is not a crawlable page and therefore does not spend the page budget.
+	if !result.consumesPageBudget() {
+		return true
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.pagesChecked >= s.maxPages {
+		s.maxPagesReached = true
+		return false
+	}
+	s.pagesChecked++
+	return true
+}
+
+func (f fetchedURL) consumesPageBudget() bool {
+	// Redirects and failures remain part of the budget because they are exactly
+	// the page/link outcomes the crawler must diagnose and report.
+	return f.ResultKind != ResultSuccess || isHTMLContentType(f.ContentType)
 }
 
 func (s *crawlSession) stats() (pagesChecked int, maxPagesReached bool) {
@@ -89,23 +108,21 @@ func (s *crawlSession) stats() (pagesChecked int, maxPagesReached bool) {
 	return s.pagesChecked, s.maxPagesReached
 }
 
-func (s *crawlSession) hasFetchEntry(target string) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	_, exists := s.cache[target]
-	return exists
-}
-
-func (i *Inspector) fetchURL(ctx context.Context, target *url.URL) (fetchedURL, error) {
+func (i *Inspector) fetchURL(
+	ctx context.Context,
+	target *url.URL,
+	admit func(fetchedURL) bool,
+) (fetchedURL, bool, error) {
 	response, cancelRequest, requestErr := i.doRequest(ctx, target)
 	if requestErr != nil {
 		if parentErr := ctx.Err(); parentErr != nil {
-			return fetchedURL{}, parentErr
+			return fetchedURL{}, false, parentErr
 		}
-		return fetchedURL{
+		result := fetchedURL{
 			ResultKind: classifyRequestError(requestErr),
 			Error:      requestErr.Error(),
-		}, nil
+		}
+		return result, admit(result), nil
 	}
 	defer cancelRequest()
 	defer response.Body.Close()
@@ -115,12 +132,15 @@ func (i *Inspector) fetchURL(ctx context.Context, target *url.URL) (fetchedURL, 
 		Status:      response.Status,
 		ContentType: response.Header.Get("Content-Type"),
 	}
+	if !admit(result) {
+		return result, false, nil
+	}
 	if result.ResultKind == ResultRedirect {
 		result.Location = response.Header.Get("Location")
-		return result, nil
+		return result, true, nil
 	}
 	if result.ResultKind != ResultSuccess || !isHTMLContentType(result.ContentType) {
-		return result, nil
+		return result, true, nil
 	}
 	if response.ContentLength > i.config.MaxHTMLBytes {
 		result.ResultKind = ResultHTMLTooLarge
@@ -129,7 +149,7 @@ func (i *Inspector) fetchURL(ctx context.Context, target *url.URL) (fetchedURL, 
 			target,
 			i.config.MaxHTMLBytes,
 		)
-		return result, nil
+		return result, true, nil
 	}
 
 	body, readErr := io.ReadAll(io.LimitReader(
@@ -138,11 +158,11 @@ func (i *Inspector) fetchURL(ctx context.Context, target *url.URL) (fetchedURL, 
 	))
 	if readErr != nil {
 		if parentErr := ctx.Err(); parentErr != nil {
-			return fetchedURL{}, parentErr
+			return fetchedURL{}, false, parentErr
 		}
 		result.ResultKind = classifyRequestError(readErr)
 		result.Error = fmt.Sprintf("read %s: %v", target, readErr)
-		return result, nil
+		return result, true, nil
 	}
 	if int64(len(body)) > i.config.MaxHTMLBytes {
 		result.ResultKind = ResultHTMLTooLarge
@@ -151,16 +171,16 @@ func (i *Inspector) fetchURL(ctx context.Context, target *url.URL) (fetchedURL, 
 			target,
 			i.config.MaxHTMLBytes,
 		)
-		return result, nil
+		return result, true, nil
 	}
 
 	links, parseErr := extractLinks(bytes.NewReader(body))
 	if parseErr != nil {
-		return fetchedURL{}, fmt.Errorf("parse HTML from %s: %w", target, parseErr)
+		return fetchedURL{}, false, fmt.Errorf("parse HTML from %s: %w", target, parseErr)
 	}
 	result.BaseHref = links.BaseHref
 	result.Hrefs = links.Hrefs
-	return result, nil
+	return result, true, nil
 }
 
 func (i *Inspector) doRequest(

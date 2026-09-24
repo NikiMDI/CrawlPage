@@ -6,8 +6,9 @@ import (
 	"time"
 )
 
-// DefaultMaxHTMLBytes limits one decoded HTML response to 2 MiB.
 const DefaultMaxHTMLBytes int64 = 2 * 1024 * 1024
+
+const DefaultMaxQueue = 1000
 
 const maxHTMLBytesUpperBound int64 = 1<<62 - 1
 
@@ -18,8 +19,8 @@ type Config struct {
 	MaxPages       int
 	MaxRedirects   int
 	Concurrency    int
-	// MaxHTMLBytes uses DefaultMaxHTMLBytes when left at zero.
-	MaxHTMLBytes int64
+	MaxQueue       int
+	MaxHTMLBytes   int64
 }
 
 func (c Config) Validate() error {
@@ -31,6 +32,9 @@ func (c Config) Validate() error {
 func (c Config) withDefaults() Config {
 	if c.MaxHTMLBytes == 0 {
 		c.MaxHTMLBytes = DefaultMaxHTMLBytes
+	}
+	if c.MaxQueue == 0 {
+		c.MaxQueue = DefaultMaxQueue
 	}
 	return c
 }
@@ -50,6 +54,9 @@ func validateConfig(config Config) (*url.URL, error) {
 	}
 	if config.Concurrency <= 0 {
 		return nil, fmt.Errorf("concurrency must be positive")
+	}
+	if config.MaxQueue <= 0 {
+		return nil, fmt.Errorf("maximum queue size must be positive")
 	}
 	if config.MaxHTMLBytes <= 0 {
 		return nil, fmt.Errorf("maximum HTML bytes must be positive")

@@ -1,6 +1,7 @@
 package crawler
 
 import (
+	"container/list"
 	"context"
 	"net/url"
 )
@@ -8,45 +9,52 @@ import (
 type crawlScheduler struct {
 	inspector *Inspector
 	result    *CrawlResult
-	session   *crawlSession
 	jobs      chan<- crawlTask
 	results   <-chan crawlWorkerResult
 
-	frontier             []crawlJob
+	frontier             *list.List
+	pending              map[string]*list.Element
 	completed            map[string]int
 	running              map[string]struct{}
 	unavailable          map[string]struct{}
+	queueSkipped         map[string]struct{}
 	expandedAt           map[string]int
 	sourceSets           map[string]map[string]struct{}
 	countedLinkDocuments map[string]struct{}
 	dispatchOrder        map[string]int
 	nextSequence         int
 	active               int
-	pageLimitReached     bool
+	peakQueueSize        int
+	queueLimitReached    bool
 }
 
 func newCrawlScheduler(
 	inspector *Inspector,
 	result *CrawlResult,
-	session *crawlSession,
 	jobs chan<- crawlTask,
 	results <-chan crawlWorkerResult,
 ) *crawlScheduler {
-	return &crawlScheduler{
+	scheduler := &crawlScheduler{
 		inspector:            inspector,
 		result:               result,
-		session:              session,
 		jobs:                 jobs,
 		results:              results,
-		frontier:             []crawlJob{{URL: inspector.startURL, Depth: 0}},
+		frontier:             list.New(),
+		pending:              make(map[string]*list.Element),
 		completed:            make(map[string]int),
 		running:              make(map[string]struct{}),
 		unavailable:          make(map[string]struct{}),
+		queueSkipped:         make(map[string]struct{}),
 		expandedAt:           make(map[string]int),
 		sourceSets:           make(map[string]map[string]struct{}),
 		countedLinkDocuments: make(map[string]struct{}),
 		dispatchOrder:        make(map[string]int),
 	}
+	startJob := crawlJob{URL: inspector.startURL, Depth: 0}
+	element := scheduler.frontier.PushBack(startJob)
+	scheduler.pending[inspector.startURL.String()] = element
+	scheduler.peakQueueSize = 1
+	return scheduler
 }
 
 func (s *crawlScheduler) run(ctx context.Context) error {
@@ -91,11 +99,12 @@ func (s *crawlScheduler) run(ctx context.Context) error {
 }
 
 func (s *crawlScheduler) nextRunnableJob() (crawlJob, bool) {
-	for len(s.frontier) > 0 {
-		last := len(s.frontier) - 1
-		job := s.frontier[last]
-		s.frontier = s.frontier[:last]
+	for s.frontier.Len() > 0 {
+		element := s.frontier.Back()
+		job := element.Value.(crawlJob)
+		s.frontier.Remove(element)
 		key := job.URL.String()
+		delete(s.pending, key)
 
 		bestDepth, known := s.result.DepthByURL[key]
 		if !known || bestDepth != job.Depth {
@@ -114,10 +123,6 @@ func (s *crawlScheduler) nextRunnableJob() (crawlJob, bool) {
 		if _, inFlight := s.running[key]; inFlight {
 			continue
 		}
-		if s.pageLimitReached && !s.session.hasFetchEntry(key) {
-			continue
-		}
-
 		return job, true
 	}
 	return crawlJob{}, false
@@ -130,8 +135,7 @@ func (s *crawlScheduler) accept(workerResult crawlWorkerResult) error {
 		return workerResult.Err
 	}
 
-	if !workerResult.PageChecked {
-		s.pageLimitReached = true
+	if !workerResult.PageAccepted {
 		s.unavailable[key] = struct{}{}
 		return nil
 	}
@@ -163,7 +167,15 @@ func (s *crawlScheduler) expand(pagePosition int, depth int) {
 	}
 	s.expandedAt[key] = depth
 
-	children := make([]crawlJob, 0, len(page.Links))
+	availableSlots := s.inspector.config.MaxQueue - s.frontier.Len()
+	if availableSlots < 0 {
+		availableSlots = 0
+	}
+	if availableSlots > len(page.Links) {
+		availableSlots = len(page.Links)
+	}
+	children := make([]crawlJob, 0, availableSlots)
+	candidatePositions := make(map[string]int, availableSlots)
 	for _, discovered := range page.Links {
 		if discovered.Kind != LinkInternal {
 			continue
@@ -171,17 +183,19 @@ func (s *crawlScheduler) expand(pagePosition int, depth int) {
 
 		childDepth := depth + 1
 		knownDepth, known := s.result.DepthByURL[discovered.URL]
-		if known && knownDepth <= childDepth {
-			continue
+		bestDepth := childDepth
+		if known && knownDepth < bestDepth {
+			bestDepth = knownDepth
 		}
-
-		s.result.DepthByURL[discovered.URL] = childDepth
+		if !known || childDepth < knownDepth {
+			s.result.DepthByURL[discovered.URL] = childDepth
+		}
 		childPosition, childDone := s.completed[discovered.URL]
-		if childDone {
-			s.result.Pages[childPosition].Depth = childDepth
+		if childDone && bestDepth < s.result.Pages[childPosition].Depth {
+			s.result.Pages[childPosition].Depth = bestDepth
 		}
 
-		if childDepth > s.inspector.config.MaxDepth {
+		if bestDepth > s.inspector.config.MaxDepth {
 			continue
 		}
 		if _, blocked := s.unavailable[discovered.URL]; blocked {
@@ -191,14 +205,47 @@ func (s *crawlScheduler) expand(pagePosition int, depth int) {
 		if err != nil {
 			continue
 		}
-		if s.pageLimitReached && !childDone &&
-			!s.session.hasFetchEntry(discovered.URL) {
+		if childDone {
+			if expandedDepth, expanded := s.expandedAt[discovered.URL]; expanded && expandedDepth <= bestDepth {
+				continue
+			}
+		}
+		if _, inFlight := s.running[discovered.URL]; inFlight {
 			continue
 		}
-		children = append(children, crawlJob{URL: childURL, Depth: childDepth})
+		if pendingElement, pending := s.pending[discovered.URL]; pending {
+			pendingJob := pendingElement.Value.(crawlJob)
+			if bestDepth < pendingJob.Depth {
+				pendingJob.Depth = bestDepth
+				pendingElement.Value = pendingJob
+			}
+			continue
+		}
+		if candidatePosition, candidate := candidatePositions[discovered.URL]; candidate {
+			if bestDepth < children[candidatePosition].Depth {
+				children[candidatePosition].Depth = bestDepth
+			}
+			continue
+		}
+		// Do not block the scheduler here: it must remain able to receive active
+		// worker results. Overflow is explicit in the report, and the URL may be
+		// admitted if another page discovers it after a slot becomes free.
+		if s.frontier.Len()+len(children) >= s.inspector.config.MaxQueue {
+			s.queueLimitReached = true
+			s.queueSkipped[discovered.URL] = struct{}{}
+			continue
+		}
+		delete(s.queueSkipped, discovered.URL)
+		candidatePositions[discovered.URL] = len(children)
+		children = append(children, crawlJob{URL: childURL, Depth: bestDepth})
 	}
 
 	for index := len(children) - 1; index >= 0; index-- {
-		s.frontier = append(s.frontier, children[index])
+		job := children[index]
+		element := s.frontier.PushBack(job)
+		s.pending[job.URL.String()] = element
+	}
+	if s.frontier.Len() > s.peakQueueSize {
+		s.peakQueueSize = s.frontier.Len()
 	}
 }

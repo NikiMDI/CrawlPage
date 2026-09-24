@@ -521,6 +521,7 @@ func TestMaxPagesAppliesInsideRedirectChain(t *testing.T) {
 		name             string
 		maxPages         int
 		wantRequests     []string
+		wantPagesChecked int
 		wantKind         crawler.ResultKind
 		wantHops         int
 		wantLimitReached bool
@@ -528,7 +529,8 @@ func TestMaxPagesAppliesInsideRedirectChain(t *testing.T) {
 		{
 			name:             "stop before first target",
 			maxPages:         1,
-			wantRequests:     []string{"/r1"},
+			wantRequests:     []string{"/r1", "/r2"},
+			wantPagesChecked: 1,
 			wantKind:         crawler.ResultPageLimit,
 			wantHops:         1,
 			wantLimitReached: true,
@@ -536,7 +538,8 @@ func TestMaxPagesAppliesInsideRedirectChain(t *testing.T) {
 		{
 			name:             "stop before final target",
 			maxPages:         2,
-			wantRequests:     []string{"/r1", "/r2"},
+			wantRequests:     []string{"/r1", "/r2", "/final"},
+			wantPagesChecked: 2,
 			wantKind:         crawler.ResultPageLimit,
 			wantHops:         2,
 			wantLimitReached: true,
@@ -545,6 +548,7 @@ func TestMaxPagesAppliesInsideRedirectChain(t *testing.T) {
 			name:             "exact page budget succeeds",
 			maxPages:         3,
 			wantRequests:     []string{"/r1", "/r2", "/final"},
+			wantPagesChecked: 3,
 			wantKind:         crawler.ResultSuccess,
 			wantHops:         2,
 			wantLimitReached: false,
@@ -573,8 +577,8 @@ func TestMaxPagesAppliesInsideRedirectChain(t *testing.T) {
 			if got := requests.snapshot(); !reflect.DeepEqual(got, test.wantRequests) {
 				t.Fatalf("requests = %v, want %v", got, test.wantRequests)
 			}
-			if result.PagesChecked != len(test.wantRequests) {
-				t.Fatalf("pages checked = %d, want %d", result.PagesChecked, len(test.wantRequests))
+			if result.PagesChecked != test.wantPagesChecked {
+				t.Fatalf("pages checked = %d, want %d", result.PagesChecked, test.wantPagesChecked)
 			}
 			if result.MaxPagesReached != test.wantLimitReached {
 				t.Fatalf("MaxPagesReached = %t, want %t", result.MaxPagesReached, test.wantLimitReached)

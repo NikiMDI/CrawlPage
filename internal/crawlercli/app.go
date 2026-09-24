@@ -24,9 +24,14 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	startURL := flags.String("url", "", "absolute start URL")
 	timeout := flags.Duration("timeout", 2*time.Second, "timeout for the HTTP request")
 	maxDepth := flags.Int("depth", 3, "maximum crawl depth; the start page has depth 0")
-	maxPages := flags.Int("max-pages", 100, "maximum number of unique internal URLs to request")
+	maxPages := flags.Int("max-pages", 100, "maximum number of HTML, redirect, and failed URL results")
 	maxRedirects := flags.Int("max-redirects", 10, "maximum redirects followed for one URL")
 	concurrency := flags.Int("concurrency", 4, "maximum number of concurrent HTTP requests")
+	maxQueue := flags.Int(
+		"max-queue",
+		crawler.DefaultMaxQueue,
+		"maximum number of URLs waiting for a worker",
+	)
 	maxHTMLBytes := flags.Int64(
 		"max-html-bytes",
 		crawler.DefaultMaxHTMLBytes,
@@ -39,6 +44,10 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "configuration error: maximum HTML bytes must be positive")
 		return 2
 	}
+	if *maxQueue <= 0 {
+		fmt.Fprintln(stderr, "configuration error: maximum queue size must be positive")
+		return 2
+	}
 
 	inspector, err := crawler.New(crawler.Config{
 		StartURL:       *startURL,
@@ -47,6 +56,7 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		MaxPages:       *maxPages,
 		MaxRedirects:   *maxRedirects,
 		Concurrency:    *concurrency,
+		MaxQueue:       *maxQueue,
 		MaxHTMLBytes:   *maxHTMLBytes,
 	})
 	if err != nil {
@@ -119,6 +129,10 @@ func writeReport(output io.Writer, result crawler.CrawlResult) {
 	fmt.Fprintf(output, "Maximum pages:      %d\n", result.MaxPages)
 	fmt.Fprintf(output, "Maximum redirects:  %d\n", result.MaxRedirects)
 	fmt.Fprintf(output, "Concurrency:        %d\n", result.Concurrency)
+	fmt.Fprintf(output, "Maximum queue:      %d\n", result.MaxQueue)
+	fmt.Fprintf(output, "Peak queue:         %d\n", result.PeakQueueSize)
+	fmt.Fprintf(output, "Queue limit reached: %t\n", result.QueueLimitReached)
+	fmt.Fprintf(output, "Skipped by queue:   %d\n", result.QueueLinksSkipped)
 	fmt.Fprintf(output, "Maximum HTML bytes: %d\n", result.MaxHTMLBytes)
 	fmt.Fprintf(output, "Elapsed:            %s\n", formatElapsed(result.Elapsed))
 	fmt.Fprintf(output, "Max pages reached:  %t\n", result.MaxPagesReached)
@@ -175,7 +189,7 @@ func writeReport(output io.Writer, result crawler.CrawlResult) {
 			fmt.Fprintf(output, "Error:  %s\n", page.Error)
 		}
 		if page.StoppedByPageLimit {
-			fmt.Fprintln(output, "Stopped: max-pages reached before requesting the final URL")
+			fmt.Fprintln(output, "Stopped: max-pages reached; response body was not processed")
 		}
 
 		for _, discovered := range page.Links {
@@ -256,7 +270,7 @@ func writeReport(output io.Writer, result crawler.CrawlResult) {
 			case page.StoppedByPageLimit:
 				fmt.Fprintf(
 					output,
-					"%d. %s — NOT REQUESTED (max-pages reached)\n",
+					"%d. %s — NOT PROCESSED (max-pages reached after response headers)\n",
 					len(page.RedirectChain)+1,
 					page.FinalURL,
 				)

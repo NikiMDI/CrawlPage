@@ -266,12 +266,21 @@ func TestCrawlHonorsMaximumPages(t *testing.T) {
 		t.Fatalf("Crawl: %v", err)
 	}
 
-	wantOrder := []string{"/", "/a"}
+	// The crawler must read response headers to distinguish an extensionless
+	// non-HTML resource from an HTML page. Over-budget HTML bodies are not read.
+	wantOrder := []string{"/", "/a", "/a-1", "/b"}
 	if got := requests.snapshot(); !reflect.DeepEqual(got, wantOrder) {
 		t.Fatalf("request order = %v, want %v", got, wantOrder)
 	}
 	if !result.MaxPagesReached {
 		t.Fatal("MaxPagesReached = false, want true")
+	}
+	if result.PagesChecked != 2 || len(result.Pages) != 2 {
+		t.Fatalf(
+			"pages checked/results = %d/%d, want only the two admitted HTML pages",
+			result.PagesChecked,
+			len(result.Pages),
+		)
 	}
 }
 
@@ -305,7 +314,9 @@ func TestMaxPagesStillAllowsCachedDepthRelaxation(t *testing.T) {
 		t.Fatalf("Crawl: %v", err)
 	}
 
-	wantOrder := []string{"/", "/long-1", "/long-2", "/visited", "/short-parent"}
+	wantOrder := []string{
+		"/", "/long-1", "/long-2", "/visited", "/short-parent", "/new-page", "/child",
+	}
 	if got := requests.snapshot(); !reflect.DeepEqual(got, wantOrder) {
 		t.Fatalf("request order = %v, want %v", got, wantOrder)
 	}
@@ -318,8 +329,13 @@ func TestMaxPagesStillAllowsCachedDepthRelaxation(t *testing.T) {
 	if got := result.DepthByURL[server.URL+"/child"]; got != 3 {
 		t.Fatalf("cached child depth = %d, want 3 after depth relaxation", got)
 	}
-	if countPath(requests.snapshot(), "/child") != 0 {
-		t.Fatal("child must not be fetched after max-pages is reached")
+	if countPath(requests.snapshot(), "/child") != 1 {
+		t.Fatal("child headers must be inspected once to determine its content type")
+	}
+	for _, page := range result.Pages {
+		if page.URL == server.URL+"/new-page" || page.URL == server.URL+"/child" {
+			t.Fatalf("over-budget HTML URL was processed as a page: %+v", page)
+		}
 	}
 }
 
@@ -352,8 +368,11 @@ func TestPageLimitStillAllowsCachedRedirectTarget(t *testing.T) {
 		t.Fatalf("Crawl: %v", err)
 	}
 
-	if got := requests.snapshot(); !reflect.DeepEqual(got, []string{"/", "/old", "/target"}) {
-		t.Fatalf("HTTP requests = %v, want root, redirect source, and target", got)
+	if got := requests.snapshot(); !reflect.DeepEqual(
+		got,
+		[]string{"/", "/old", "/target", "/leaf", "/uncached"},
+	) {
+		t.Fatalf("HTTP requests = %v, want admitted pages plus MIME header probes", got)
 	}
 	if result.PagesChecked != 3 || !result.MaxPagesReached {
 		t.Fatalf(
@@ -405,8 +424,149 @@ func TestCrawlChecksBinaryContentWithoutParsingIt(t *testing.T) {
 	if _, exists := result.SourcesByURL[server.URL+"/must-not-be-requested"]; exists {
 		t.Fatal("link-like text from binary content must not be parsed as HTML")
 	}
+	if result.PagesChecked != 1 {
+		t.Fatalf("pages checked = %d, want only the HTML start page", result.PagesChecked)
+	}
+	binary := findPage(t, result, server.URL+"/binary")
+	if binary.ResultKind != crawler.ResultSuccess || binary.HTMLParsed {
+		t.Fatalf("binary result = %+v, want unparsed SUCCESS", binary)
+	}
+	if result.MaxPagesReached {
+		t.Fatal("MaxPagesReached = true, want false for a successful non-HTML resource")
+	}
+}
+
+func TestSuccessfulNonHTMLResourcesDoNotConsumeMaxPages(t *testing.T) {
+	resources := []struct {
+		path        string
+		contentType string
+	}{
+		{path: "/photo.jpg", contentType: "image/jpeg"},
+		{path: "/picture.png", contentType: "image/png"},
+		{path: "/movie.mp4", contentType: "video/mp4"},
+		{path: "/styles.css", contentType: "text/css"},
+		{path: "/app.js", contentType: "application/javascript"},
+		{path: "/download.dat", contentType: "application/octet-stream"},
+		{path: "/asset", contentType: "application/octet-stream"},
+	}
+	resourceByPath := make(map[string]string, len(resources))
+	for _, resource := range resources {
+		resourceByPath[resource.path] = resource.contentType
+	}
+
+	var requests requestRecorder
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.add(r.URL.Path)
+		switch r.URL.Path {
+		case "/":
+			links := []string{`<a href="/page">HTML page</a>`}
+			for _, resource := range resources {
+				links = append(links, fmt.Sprintf(`<a href="%s">Resource</a>`, resource.path))
+			}
+			writeTestHTML(w, links...)
+		case "/page":
+			writeTestHTML(w)
+		default:
+			contentType, exists := resourceByPath[r.URL.Path]
+			if !exists {
+				http.NotFound(w, r)
+				return
+			}
+			w.Header().Set("Content-Type", contentType)
+			fmt.Fprint(w, `<a href="/must-not-be-requested">Fake HTML link</a>`)
+		}
+	}))
+	defer server.Close()
+
+	inspector := newTestInspector(t, server.URL+"/", 1, 2, time.Second)
+	result, err := inspector.Crawl(context.Background())
+	if err != nil {
+		t.Fatalf("Crawl: %v", err)
+	}
+
+	wantRequests := []string{"/", "/page"}
+	for _, resource := range resources {
+		wantRequests = append(wantRequests, resource.path)
+	}
+	if got := requests.snapshot(); !reflect.DeepEqual(got, wantRequests) {
+		t.Fatalf("requests = %v, want %v", got, wantRequests)
+	}
 	if result.PagesChecked != 2 {
-		t.Fatalf("pages checked = %d, want both requested HTTP URLs", result.PagesChecked)
+		t.Fatalf("PagesChecked = %d, want the two HTML pages only", result.PagesChecked)
+	}
+	if result.MaxPagesReached {
+		t.Fatal("MaxPagesReached = true, want false when remaining URLs are successful non-HTML resources")
+	}
+	for _, resource := range resources {
+		page := findPage(t, result, server.URL+resource.path)
+		if page.ResultKind != crawler.ResultSuccess || page.HTMLParsed {
+			t.Errorf("resource %s = %+v, want unparsed SUCCESS", resource.path, page)
+		}
+		if page.ContentType != resource.contentType {
+			t.Errorf("resource %s ContentType = %q, want %q", resource.path, page.ContentType, resource.contentType)
+		}
+	}
+	if _, exists := result.SourcesByURL[server.URL+"/must-not-be-requested"]; exists {
+		t.Fatal("link-like content from non-HTML resources must not be parsed")
+	}
+}
+
+func TestContentTypeDeterminesHTMLRegardlessOfFileExtension(t *testing.T) {
+	var requests requestRecorder
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.add(r.URL.Path)
+		switch r.URL.Path {
+		case "/":
+			writeTestHTML(w,
+				`<a href="/looks-like-image.jpg">HTML with image extension</a>`,
+				`<a href="/looks-like-html.html">Image with HTML extension</a>`,
+			)
+		case "/looks-like-image.jpg":
+			writeTestHTML(w, `<a href="/found-in-real-html">Real HTML link</a>`)
+		case "/looks-like-html.html":
+			w.Header().Set("Content-Type", "image/jpeg")
+			fmt.Fprint(w, `<a href="/must-not-be-found">Fake HTML link</a>`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	inspector := newTestInspector(t, server.URL+"/", 1, 2, time.Second)
+	result, err := inspector.Crawl(context.Background())
+	if err != nil {
+		t.Fatalf("Crawl: %v", err)
+	}
+
+	wantRequests := []string{"/", "/looks-like-image.jpg", "/looks-like-html.html"}
+	if got := requests.snapshot(); !reflect.DeepEqual(got, wantRequests) {
+		t.Fatalf("requests = %v, want %v", got, wantRequests)
+	}
+	if result.PagesChecked != 2 || result.MaxPagesReached {
+		t.Fatalf(
+			"PagesChecked/MaxPagesReached = %d/%t, want 2/false",
+			result.PagesChecked,
+			result.MaxPagesReached,
+		)
+	}
+
+	htmlWithImageExtension := findPage(t, result, server.URL+"/looks-like-image.jpg")
+	if !htmlWithImageExtension.HTMLParsed {
+		t.Fatal("text/html response with .jpg extension was not parsed")
+	}
+	if got := result.SourcesByURL[server.URL+"/found-in-real-html"]; !reflect.DeepEqual(
+		got,
+		[]string{server.URL + "/looks-like-image.jpg"},
+	) {
+		t.Fatalf("real HTML link sources = %v, want the .jpg URL", got)
+	}
+
+	imageWithHTMLExtension := findPage(t, result, server.URL+"/looks-like-html.html")
+	if imageWithHTMLExtension.HTMLParsed {
+		t.Fatal("image/jpeg response with .html extension must not be parsed")
+	}
+	if _, exists := result.SourcesByURL[server.URL+"/must-not-be-found"]; exists {
+		t.Fatal("image/jpeg body with .html extension was parsed as HTML")
 	}
 }
 

@@ -59,21 +59,25 @@ type PageResult struct {
 }
 
 type CrawlResult struct {
-	StartURL        string
-	MaxDepth        int
-	MaxPages        int
-	MaxRedirects    int
-	Concurrency     int
-	MaxHTMLBytes    int64
-	Elapsed         time.Duration
-	PagesChecked    int
-	Pages           []PageResult
-	DepthByURL      map[string]int
-	SourcesByURL    map[string][]string
-	Problems        []Problem
-	HTMLTooLarge    []Problem
-	LinksDiscovered int
-	MaxPagesReached bool
+	StartURL          string
+	MaxDepth          int
+	MaxPages          int
+	MaxRedirects      int
+	Concurrency       int
+	MaxQueue          int
+	MaxHTMLBytes      int64
+	Elapsed           time.Duration
+	PagesChecked      int
+	Pages             []PageResult
+	DepthByURL        map[string]int
+	SourcesByURL      map[string][]string
+	Problems          []Problem
+	HTMLTooLarge      []Problem
+	LinksDiscovered   int
+	MaxPagesReached   bool
+	PeakQueueSize     int
+	QueueLimitReached bool
+	QueueLinksSkipped int
 }
 
 type Inspector struct {
@@ -124,21 +128,21 @@ func (i *Inspector) inspectURL(
 	currentURL := target
 	redirectURLs := map[string]struct{}{target.String(): {}}
 	redirectsFollowed := 0
-	pageChecked := false
+	pageAccepted := false
 
 	for {
 		result.FinalURL = currentURL.String()
 		fetched, available, fetchErr := session.fetch(ctx, i, currentURL)
 		if fetchErr != nil {
-			return result, pageChecked, fetchErr
+			return result, pageAccepted, fetchErr
 		}
 		if !available {
 			result.ResultKind = ResultPageLimit
 			result.Status = ""
 			result.StoppedByPageLimit = true
-			return result, pageChecked, nil
+			return result, pageAccepted, nil
 		}
-		pageChecked = true
+		pageAccepted = true
 
 		if fetched.ResultKind == ResultRedirect {
 			rawLocation := strings.TrimSpace(fetched.Location)
@@ -155,7 +159,7 @@ func (i *Inspector) inspectURL(
 					"redirect response from %s has no Location header",
 					currentURL,
 				)
-				return result, pageChecked, nil
+				return result, pageAccepted, nil
 			}
 
 			nextURL, normalizeErr := normalizeURL(currentURL, rawLocation)
@@ -169,7 +173,7 @@ func (i *Inspector) inspectURL(
 					currentURL,
 					normalizeErr,
 				)
-				return result, pageChecked, nil
+				return result, pageAccepted, nil
 			}
 
 			hop.TargetURL = nextURL.String()
@@ -179,13 +183,13 @@ func (i *Inspector) inspectURL(
 			if !i.scope.contains(nextURL) {
 				result.ResultKind = ResultRedirect
 				result.RedirectedOutsideScope = true
-				return result, pageChecked, nil
+				return result, pageAccepted, nil
 			}
 			if isPDFURL(nextURL) {
 				result.ResultKind = ResultRedirect
 				result.RedirectTargetSkipped = true
 				result.RedirectSkipReason = "PDF resources are not crawled"
-				return result, pageChecked, nil
+				return result, pageAccepted, nil
 			}
 			if _, repeated := redirectURLs[nextURL.String()]; repeated {
 				result.ResultKind = ResultRedirectError
@@ -194,7 +198,7 @@ func (i *Inspector) inspectURL(
 					"redirect cycle detected: %s already occurred in this chain",
 					nextURL,
 				)
-				return result, pageChecked, nil
+				return result, pageAccepted, nil
 			}
 			if redirectsFollowed >= i.config.MaxRedirects {
 				result.ResultKind = ResultRedirectError
@@ -203,7 +207,7 @@ func (i *Inspector) inspectURL(
 					i.config.MaxRedirects,
 					nextURL,
 				)
-				return result, pageChecked, nil
+				return result, pageAccepted, nil
 			}
 
 			redirectsFollowed++
@@ -220,7 +224,7 @@ func (i *Inspector) inspectURL(
 		result.ContentType = fetched.ContentType
 
 		if result.ResultKind != ResultSuccess || !isHTMLContentType(result.ContentType) {
-			return result, pageChecked, nil
+			return result, pageAccepted, nil
 		}
 		result.HTMLParsed = true
 		result.LinksDiscovered = len(fetched.Hrefs)
@@ -261,7 +265,7 @@ func (i *Inspector) inspectURL(
 			})
 		}
 
-		return result, pageChecked, nil
+		return result, pageAccepted, nil
 	}
 }
 

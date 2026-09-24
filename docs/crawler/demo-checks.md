@@ -169,7 +169,15 @@ Max pages reached:  true
 Pages checked:      5
 ```
 
-Crawler должен корректно завершиться и не начинать шестой уникальный HTTP-запрос.
+Crawler должен корректно завершиться, а `Pages checked` не должен превышать `5`. Для определения `Content-Type` crawler может получить заголовки дополнительных URL; их HTML-body не читается и не разбирается. Успешные non-HTML-ответы в бюджет не входят.
+
+Ограничение очереди проверяется отдельно, например:
+
+```powershell
+go test -count=1 -v -run 'Queue' ./tests/crawler ./tests/crawlercli
+```
+
+Тесты подтверждают `Peak queue <= Maximum queue`, явный счётчик переполнения, сохранение DFS при одном worker и то, что одинаковый URL занимает один слот.
 
 ## Набор 6. DFS, цикл и повторяющиеся URL
 
@@ -303,6 +311,18 @@ go test -count=1 -v -run '^TestRunReportsHTMLBodyLimit$' ./tests/crawlercli
 
 ```powershell
 go test -count=1 -v -run '^(TestPDFLinkIsSkippedWithoutHTTPRequest|TestRedirectToPDFIsRecordedButNotRequested|TestStartURLRejectsPDF|TestInspectStartResolvesLinksAgainstFirstBaseHref)$' ./tests/crawler
+```
+
+Успешные non-HTML MIME-типы не расходуют `max-pages`, а `Content-Type` важнее расширения URL:
+
+```powershell
+go test -count=1 -v -run '^(TestCrawlChecksBinaryContentWithoutParsingIt|TestSuccessfulNonHTMLResourcesDoNotConsumeMaxPages|TestContentTypeDeterminesHTMLRegardlessOfFileExtension|TestConcurrentNonHTMLResponsesDoNotSpendPageBudget)$' ./tests/crawler
+```
+
+Ограниченная очередь scheduler и поля отчёта:
+
+```powershell
+go test -count=1 -v -run 'Queue' ./tests/crawler ./tests/crawlercli
 ```
 
 Сетевая ошибка без остановки остального обхода:

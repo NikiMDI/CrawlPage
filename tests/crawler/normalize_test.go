@@ -211,6 +211,7 @@ func TestCrawlerConfigValidation(t *testing.T) {
 		{StartURL: "http://example.com", RequestTimeout: 1, MaxDepth: 1, MaxPages: 1, MaxRedirects: -1, Concurrency: 1},
 		{StartURL: "http://example.com", RequestTimeout: 1, MaxDepth: 1, MaxPages: 1, MaxRedirects: 10, Concurrency: 0},
 		{StartURL: "http://example.com", RequestTimeout: 1, MaxDepth: 1, MaxPages: 1, MaxRedirects: 10, Concurrency: -1},
+		{StartURL: "http://example.com", RequestTimeout: 1, MaxDepth: 1, MaxPages: 1, MaxRedirects: 10, Concurrency: 1, MaxQueue: -1},
 		{StartURL: "http://example.com", RequestTimeout: 1, MaxDepth: 1, MaxPages: 1, MaxRedirects: 10, Concurrency: 1, MaxHTMLBytes: -1},
 	}
 	for _, config := range tests {

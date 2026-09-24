@@ -22,6 +22,7 @@ func (i *Inspector) Crawl(ctx context.Context) (result CrawlResult, err error) {
 		MaxPages:     i.config.MaxPages,
 		MaxRedirects: i.config.MaxRedirects,
 		Concurrency:  i.config.Concurrency,
+		MaxQueue:     i.config.MaxQueue,
 		MaxHTMLBytes: i.config.MaxHTMLBytes,
 		DepthByURL:   map[string]int{i.startURL.String(): 0},
 		SourcesByURL: make(map[string][]string),
@@ -39,13 +40,16 @@ func (i *Inspector) Crawl(ctx context.Context) (result CrawlResult, err error) {
 		}()
 	}
 
-	scheduler := newCrawlScheduler(i, &result, session, jobs, workerResults)
+	scheduler := newCrawlScheduler(i, &result, jobs, workerResults)
 	defer func() {
 		cancelWorkers()
 		close(jobs)
 		workers.Wait()
 
 		result.PagesChecked, result.MaxPagesReached = session.stats()
+		result.PeakQueueSize = scheduler.peakQueueSize
+		result.QueueLimitReached = scheduler.queueLimitReached
+		result.QueueLinksSkipped = len(scheduler.queueSkipped)
 		sort.SliceStable(result.Pages, func(left, right int) bool {
 			return scheduler.dispatchOrder[result.Pages[left].URL] <
 				scheduler.dispatchOrder[result.Pages[right].URL]

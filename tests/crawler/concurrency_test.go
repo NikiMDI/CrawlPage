@@ -448,7 +448,7 @@ func TestConcurrentDepthRelaxationReexpandsWithoutRefetch(t *testing.T) {
 	}
 }
 
-func TestConcurrentCrawlNeverExceedsMaxPages(t *testing.T) {
+func TestConcurrentCrawlNeverExceedsMaxPagesBudget(t *testing.T) {
 	const children = 16
 	var totalRequests atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -472,8 +472,8 @@ func TestConcurrentCrawlNeverExceedsMaxPages(t *testing.T) {
 		t.Fatalf("Crawl: %v", err)
 	}
 
-	if got := totalRequests.Load(); got != 5 {
-		t.Fatalf("HTTP requests = %d, want exactly max-pages 5", got)
+	if got := totalRequests.Load(); got < 5 {
+		t.Fatalf("HTTP requests = %d, want at least the 5 admitted pages", got)
 	}
 	if result.PagesChecked != 5 || !result.MaxPagesReached {
 		t.Fatalf(
@@ -481,6 +481,67 @@ func TestConcurrentCrawlNeverExceedsMaxPages(t *testing.T) {
 			result.PagesChecked,
 			result.MaxPagesReached,
 		)
+	}
+}
+
+func TestConcurrentNonHTMLResponsesDoNotSpendPageBudget(t *testing.T) {
+	resources := map[string]string{
+		"/image.jpg": "image/jpeg",
+		"/image.png": "image/png",
+		"/video.mp4": "video/mp4",
+		"/style.css": "text/css",
+		"/script.js": "application/javascript",
+		"/asset":     "application/octet-stream",
+	}
+	const htmlChildren = 6
+	var requests requestRecorder
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.add(r.URL.Path)
+		if r.URL.Path == "/" {
+			links := make([]string, 0, len(resources)+htmlChildren)
+			for path := range resources {
+				links = append(links, fmt.Sprintf(`<a href="%s">Resource</a>`, path))
+			}
+			for index := 1; index <= htmlChildren; index++ {
+				links = append(links, fmt.Sprintf(`<a href="/page-%d">Page</a>`, index))
+			}
+			writeTestHTML(w, links...)
+			return
+		}
+		if contentType, exists := resources[r.URL.Path]; exists {
+			w.Header().Set("Content-Type", contentType)
+			fmt.Fprint(w, "resource body")
+			return
+		}
+		writeTestHTML(w)
+	}))
+	defer server.Close()
+
+	inspector := newConcurrentInspector(t, server.URL+"/", 1, 4, 8)
+	result, err := inspector.Crawl(context.Background())
+	if err != nil {
+		t.Fatalf("Crawl: %v", err)
+	}
+
+	if result.PagesChecked != 4 || !result.MaxPagesReached {
+		t.Fatalf(
+			"pages checked/max reached = %d/%t, want 4/true",
+			result.PagesChecked,
+			result.MaxPagesReached,
+		)
+	}
+	if got, want := len(requests.snapshot()), 1+len(resources)+htmlChildren; got != want {
+		t.Fatalf("HTTP requests = %d, want all %d MIME-classified candidates", got, want)
+	}
+	for path, contentType := range resources {
+		page := findPage(t, result, server.URL+path)
+		if page.ResultKind != crawler.ResultSuccess || page.HTMLParsed {
+			t.Errorf("resource %s = %+v, want unparsed SUCCESS", path, page)
+		}
+		if page.ContentType != contentType {
+			t.Errorf("resource %s content type = %q, want %q", path, page.ContentType, contentType)
+		}
 	}
 }
 
@@ -543,9 +604,9 @@ func TestConcurrentRedirectsShareMaxPagesBudget(t *testing.T) {
 	if outcome.err != nil {
 		t.Fatalf("Crawl: %v", outcome.err)
 	}
-	if totalRequests.Load() != 4 || outcome.result.PagesChecked != 4 || !outcome.result.MaxPagesReached {
+	if totalRequests.Load() != 5 || outcome.result.PagesChecked != 4 || !outcome.result.MaxPagesReached {
 		t.Fatalf(
-			"requests/pages/max reached = %d / %d / %t, want 4 / 4 / true",
+			"requests/pages/max reached = %d / %d / %t, want 5 / 4 / true",
 			totalRequests.Load(),
 			outcome.result.PagesChecked,
 			outcome.result.MaxPagesReached,

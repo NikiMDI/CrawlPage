@@ -30,6 +30,7 @@ Maximum depth
 Maximum pages
 Maximum redirects
 Concurrency
+Maximum queue / Peak queue / Queue limit reached
 Elapsed
 Pages checked
 Links discovered
@@ -60,7 +61,7 @@ Timeouts / Network errors
 
 Чтобы отличить HTML от extensionless ресурса, scheduler продолжает выдавать обнаруженные URL: HTTP-заголовки могут быть получены, но тело HTML сверх бюджета не читается и не разбирается. Поэтому физических запросов может быть больше `PagesChecked`. URL с существующей fetch-entry по-прежнему обрабатывается без повторного HTTP-запроса.
 
-Ожидающий `frontier` отдельно ограничен `MaxQueue`; канал `jobs` небуферизован, а активная работа ограничена `Concurrency`. При переполнении очередь не растёт: ссылка учитывается в счётчике `Skipped by queue` и может быть принята при более позднем повторном обнаружении. Crawler по-прежнему хранит обнаруженные рёбра для графа и отчёта, поэтому общий объём отчёта зависит от количества href, уже прочитанных из HTML.
+Число готовых заданий в `frontier` отдельно ограничено `MaxQueue`; канал `jobs` небуферизован, а активная работа ограничена `Concurrency`. Когда готовые слоты заполнены, кадр расширения сохраняет курсор по ссылкам страницы. После освобождения слотов scheduler продолжает с этого места: повторное обнаружение ссылки не требуется и URL не теряется. `QueueLimitReached` показывает, возникала ли такая задержка; `PeakQueueSize` не превышает `MaxQueue`. Crawler по-прежнему хранит обнаруженные рёбра для графа и отчёта, поэтому общий объём отчёта зависит от количества href, уже прочитанных из HTML.
 
 ## Финальный приёмочный тест
 
@@ -99,6 +100,8 @@ timeout     < slow-delay
 | Same-scope и HTTP→HTTPS upgrade | `scope.go` | `normalize_test.go`, `redirect_test.go` |
 | Максимальная глубина | `scheduler.expand` | `crawl_test.go`, `acceptance_test.go` |
 | `max-pages` | `crawlSession.fetch` | `crawl_test.go`, `concurrency_test.go` |
+| `max-queue` без потери ссылок | `expansionFrame` в scheduler | `queue_test.go` |
+| MIME вместо расширения PDF | `fetch.go`, `Content-Type` | `crawl_test.go`, `redirect_test.go` |
 | Конкурентность | fixed worker pool | `concurrency_test.go` |
 | Повторные URL и циклы | scheduler + fetch cache | `crawl_test.go`, `concurrency_test.go` |
 | 4xx/5xx с детализацией, network/timeout | `classify.go`, `fetch.go`, CLI | `results_test.go`, CLI tests |

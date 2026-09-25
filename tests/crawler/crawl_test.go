@@ -448,6 +448,8 @@ func TestSuccessfulNonHTMLResourcesDoNotConsumeMaxPages(t *testing.T) {
 		{path: "/app.js", contentType: "application/javascript"},
 		{path: "/download.dat", contentType: "application/octet-stream"},
 		{path: "/asset", contentType: "application/octet-stream"},
+		{path: "/document.PDF", contentType: "application/pdf"},
+		{path: "/pdf-resource", contentType: "application/pdf"},
 	}
 	resourceByPath := make(map[string]string, len(resources))
 	for _, resource := range resources {
@@ -570,7 +572,7 @@ func TestContentTypeDeterminesHTMLRegardlessOfFileExtension(t *testing.T) {
 	}
 }
 
-func TestPDFLinkIsSkippedWithoutHTTPRequest(t *testing.T) {
+func TestHTMLAtPDFSuffixIsParsedAndConsumesPageBudget(t *testing.T) {
 	var requests requestRecorder
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests.add(r.URL.Path)
@@ -583,10 +585,92 @@ func TestPDFLinkIsSkippedWithoutHTTPRequest(t *testing.T) {
 		case "/page":
 			writeTestHTML(w)
 		case "/document.PDF":
-			w.WriteHeader(http.StatusInternalServerError)
+			writeTestHTML(w, `<a href="/nested">Nested</a>`)
+		case "/nested":
+			writeTestHTML(w)
 		default:
 			http.NotFound(w, r)
 		}
+	}))
+	defer server.Close()
+
+	inspector := newTestInspector(t, server.URL+"/", 2, 4, time.Second)
+	result, err := inspector.Crawl(context.Background())
+	if err != nil {
+		t.Fatalf("Crawl: %v", err)
+	}
+
+	wantRequests := []string{"/", "/page", "/document.PDF", "/nested"}
+	if got := requests.snapshot(); !reflect.DeepEqual(got, wantRequests) {
+		t.Fatalf("requests = %v, want %v", got, wantRequests)
+	}
+	if result.PagesChecked != 4 {
+		t.Fatalf("pages checked = %d, want all four HTML pages", result.PagesChecked)
+	}
+	root := findPage(t, result, server.URL+"/")
+	if len(root.Skipped) != 0 {
+		t.Fatalf("skipped links = %+v, want none", root.Skipped)
+	}
+	document := findPage(t, result, server.URL+"/document.PDF?download=1")
+	if !document.HTMLParsed || document.ContentType != "text/html; charset=UTF-8" {
+		t.Fatalf(".PDF URL with HTML content was not parsed: %+v", document)
+	}
+	if got := result.SourcesByURL[server.URL+"/nested"]; !reflect.DeepEqual(got, []string{server.URL + "/document.PDF?download=1"}) {
+		t.Fatalf("nested link sources = %v, want the .PDF URL", got)
+	}
+}
+
+func TestPDFSuffixStartURLUsesResponseContentType(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/starts-as-html.PDF":
+			writeTestHTML(w, `<a href="/child">Child</a>`)
+		case "/child":
+			writeTestHTML(w)
+		case "/starts-as-pdf.PDF":
+			w.Header().Set("Content-Type", "application/pdf")
+			fmt.Fprint(w, `<a href="/must-not-be-requested">Fake HTML link</a>`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	for _, test := range []struct {
+		name         string
+		start        string
+		pagesChecked int
+		htmlParsed   bool
+		links        int
+	}{
+		{name: "HTML", start: "/starts-as-html.PDF", pagesChecked: 2, htmlParsed: true, links: 1},
+		{name: "PDF", start: "/starts-as-pdf.PDF", pagesChecked: 0, htmlParsed: false, links: 0},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			inspector := newTestInspector(t, server.URL+test.start, 1, 2, time.Second)
+			result, err := inspector.Crawl(context.Background())
+			if err != nil {
+				t.Fatalf("Crawl: %v", err)
+			}
+			startPage := findPage(t, result, server.URL+test.start)
+			if startPage.ResultKind != crawler.ResultSuccess || startPage.HTMLParsed != test.htmlParsed ||
+				result.PagesChecked != test.pagesChecked || result.LinksDiscovered != test.links {
+				t.Fatalf("start page/result = %+v / %+v", startPage, result)
+			}
+			if _, exists := result.SourcesByURL[server.URL+"/must-not-be-requested"]; exists {
+				t.Fatal("PDF response body was parsed as HTML")
+			}
+		})
+	}
+}
+
+func TestPDFSuffixHTTPErrorIsReported(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/" {
+			writeTestHTML(w, `<a href="/missing.PDF">Missing document</a>`)
+			return
+		}
+		http.NotFound(w, r)
 	}))
 	defer server.Close()
 
@@ -595,24 +679,10 @@ func TestPDFLinkIsSkippedWithoutHTTPRequest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Crawl: %v", err)
 	}
-
-	wantRequests := []string{"/", "/page"}
-	if got := requests.snapshot(); !reflect.DeepEqual(got, wantRequests) {
-		t.Fatalf("requests = %v, want %v", got, wantRequests)
-	}
-	if result.PagesChecked != 2 {
-		t.Fatalf("pages checked = %d, want only the two requested HTML pages", result.PagesChecked)
-	}
-	root := findPage(t, result, server.URL+"/")
-	if len(root.Skipped) != 1 ||
-		root.Skipped[0].RawHref != "/document.PDF?download=1" ||
-		!strings.Contains(root.Skipped[0].Reason, "PDF") {
-		t.Fatalf("skipped links = %+v, want the PDF link", root.Skipped)
-	}
-	for _, page := range result.Pages {
-		if strings.Contains(strings.ToLower(page.URL), ".pdf") {
-			t.Fatalf("PDF unexpectedly appears in checked pages: %+v", page)
-		}
+	missing := findPage(t, result, server.URL+"/missing.PDF")
+	if missing.ResultKind != crawler.ResultHTTP4XX || missing.Status != "404 Not Found" ||
+		result.PagesChecked != 2 || len(result.Problems) != 1 {
+		t.Fatalf("missing .PDF result = %+v; pages checked = %d; problems = %+v", missing, result.PagesChecked, result.Problems)
 	}
 }
 

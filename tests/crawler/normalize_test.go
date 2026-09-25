@@ -186,7 +186,7 @@ func TestStartURLCanonicalizationThroughCrawlResult(t *testing.T) {
 	}
 }
 
-func TestStartURLRejectsPDF(t *testing.T) {
+func TestStartURLWithPDFSuffixIsAllowed(t *testing.T) {
 	_, err := crawler.New(crawler.Config{
 		StartURL:       "http://example.com/manual.PDF?download=1",
 		RequestTimeout: time.Second,
@@ -195,8 +195,8 @@ func TestStartURLRejectsPDF(t *testing.T) {
 		MaxRedirects:   10,
 		Concurrency:    1,
 	})
-	if err == nil || !strings.Contains(err.Error(), "must not point to a PDF") {
-		t.Fatalf("New error = %v, want rejected PDF start URL", err)
+	if err != nil {
+		t.Fatalf("New error = %v, want URL to be classified after its HTTP response", err)
 	}
 }
 

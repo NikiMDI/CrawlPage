@@ -177,7 +177,7 @@ Crawler должен корректно завершиться, а `Pages checke
 go test -count=1 -v -run 'Queue' ./tests/crawler ./tests/crawlercli
 ```
 
-Тесты подтверждают `Peak queue <= Maximum queue`, явный счётчик переполнения, сохранение DFS при одном worker и то, что одинаковый URL занимает один слот.
+Тесты подтверждают `Peak queue <= Maximum queue`, отсутствие потери URL при заполнении очереди, сохранение DFS при одном worker и то, что одинаковый URL занимает один слот. `Queue limit reached: true` означает задержку постановки заданий, а не неполный обход.
 
 ## Набор 6. DFS, цикл и повторяющиеся URL
 
@@ -307,10 +307,10 @@ go test -count=1 -v -run '^TestHTMLBodyLimitAcceptsExactSizeAndRejectsLargerChun
 go test -count=1 -v -run '^TestRunReportsHTMLBodyLimit$' ./tests/crawlercli
 ```
 
-Пропуск PDF без HTTP-запроса и разрешение ссылок через `<base href>`:
+Проверка PDF по HTTP `Content-Type`, включая URL с `.pdf` и без расширения, а также разрешение ссылок через `<base href>`:
 
 ```powershell
-go test -count=1 -v -run '^(TestPDFLinkIsSkippedWithoutHTTPRequest|TestRedirectToPDFIsRecordedButNotRequested|TestStartURLRejectsPDF|TestInspectStartResolvesLinksAgainstFirstBaseHref)$' ./tests/crawler
+go test -count=1 -v -run '^(TestHTMLAtPDFSuffixIsParsedAndConsumesPageBudget|TestPDFSuffixStartURLUsesResponseContentType|TestPDFSuffixHTTPErrorIsReported|TestRedirectToPDFSuffixWithHTMLIsFollowedAndParsed|TestRedirectToPDFContentTypeIsRecordedWithoutReadingBody|TestInspectStartResolvesLinksAgainstFirstBaseHref)$' ./tests/crawler
 ```
 
 Успешные non-HTML MIME-типы не расходуют `max-pages`, а `Content-Type` важнее расширения URL:
@@ -319,7 +319,7 @@ go test -count=1 -v -run '^(TestPDFLinkIsSkippedWithoutHTTPRequest|TestRedirectT
 go test -count=1 -v -run '^(TestCrawlChecksBinaryContentWithoutParsingIt|TestSuccessfulNonHTMLResourcesDoNotConsumeMaxPages|TestContentTypeDeterminesHTMLRegardlessOfFileExtension|TestConcurrentNonHTMLResponsesDoNotSpendPageBudget)$' ./tests/crawler
 ```
 
-Ограниченная очередь scheduler и поля отчёта:
+Ограниченная очередь scheduler без потери ссылок и поля отчёта:
 
 ```powershell
 go test -count=1 -v -run 'Queue' ./tests/crawler ./tests/crawlercli

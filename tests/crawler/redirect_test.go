@@ -383,7 +383,7 @@ func TestRedirectToExternalOriginIsRecordedButNotRequested(t *testing.T) {
 	}
 }
 
-func TestRedirectToPDFIsRecordedButNotRequested(t *testing.T) {
+func TestRedirectToPDFSuffixWithHTMLIsFollowedAndParsed(t *testing.T) {
 	var requests requestRecorder
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests.add(r.URL.Path)
@@ -392,7 +392,7 @@ func TestRedirectToPDFIsRecordedButNotRequested(t *testing.T) {
 			w.Header().Set("Location", "/manual.PDF?download=1")
 			w.WriteHeader(http.StatusFound)
 		case "/manual.PDF":
-			w.WriteHeader(http.StatusInternalServerError)
+			writeTestHTML(w, `<a href="/nested">Nested</a>`)
 		default:
 			http.NotFound(w, r)
 		}
@@ -405,20 +405,61 @@ func TestRedirectToPDFIsRecordedButNotRequested(t *testing.T) {
 		t.Fatalf("Crawl: %v", err)
 	}
 
-	if got := requests.snapshot(); !reflect.DeepEqual(got, []string{"/start"}) {
-		t.Fatalf("requests = %v, PDF redirect target must not be requested", got)
+	if got := requests.snapshot(); !reflect.DeepEqual(got, []string{"/start", "/manual.PDF"}) {
+		t.Fatalf("requests = %v, want redirect target requested", got)
 	}
 	page := findPage(t, result, server.URL+"/start")
-	if page.ResultKind != crawler.ResultRedirect ||
-		!page.RedirectTargetSkipped ||
-		!strings.Contains(page.RedirectSkipReason, "PDF") {
-		t.Fatalf("PDF redirect result = %+v", page)
+	if page.ResultKind != crawler.ResultSuccess || !page.HTMLParsed ||
+		len(page.RedirectChain) != 1 {
+		t.Fatalf("redirect to HTML at .PDF URL = %+v", page)
 	}
 	if page.FinalURL != server.URL+"/manual.PDF?download=1" {
-		t.Fatalf("final URL = %q, want the skipped PDF target", page.FinalURL)
+		t.Fatalf("final URL = %q, want the HTML redirect target", page.FinalURL)
 	}
-	if result.PagesChecked != 1 {
-		t.Fatalf("pages checked = %d, want only the redirect source", result.PagesChecked)
+	if result.PagesChecked != 2 {
+		t.Fatalf("pages checked = %d, want redirect and HTML target", result.PagesChecked)
+	}
+	if got := result.SourcesByURL[server.URL+"/nested"]; !reflect.DeepEqual(got, []string{server.URL + "/manual.PDF?download=1"}) {
+		t.Fatalf("nested link sources = %v, want the .PDF target", got)
+	}
+}
+
+func TestRedirectToPDFContentTypeIsRecordedWithoutReadingBody(t *testing.T) {
+	var requests requestRecorder
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.add(r.URL.Path)
+		switch r.URL.Path {
+		case "/start":
+			w.Header().Set("Location", "/download")
+			w.WriteHeader(http.StatusFound)
+		case "/download":
+			w.Header().Set("Content-Type", "application/pdf")
+			fmt.Fprint(w, `<a href="/must-not-be-found">Fake HTML link</a>`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	inspector := newRedirectInspector(t, server.URL+"/start", 1, 1, time.Second, 10)
+	result, err := inspector.Crawl(context.Background())
+	if err != nil {
+		t.Fatalf("Crawl: %v", err)
+	}
+
+	if got := requests.snapshot(); !reflect.DeepEqual(got, []string{"/start", "/download"}) {
+		t.Fatalf("requests = %v, want redirect and PDF target", got)
+	}
+	page := findPage(t, result, server.URL+"/start")
+	if page.ResultKind != crawler.ResultSuccess || page.HTMLParsed ||
+		page.ContentType != "application/pdf" || len(page.RedirectChain) != 1 {
+		t.Fatalf("redirect to application/pdf = %+v", page)
+	}
+	if page.FinalURL != server.URL+"/download" || result.PagesChecked != 1 || result.MaxPagesReached {
+		t.Fatalf("final/pages/max reached = %q/%d/%t, want /download/1/false", page.FinalURL, result.PagesChecked, result.MaxPagesReached)
+	}
+	if _, exists := result.SourcesByURL[server.URL+"/must-not-be-found"]; exists {
+		t.Fatal("application/pdf body was parsed as HTML")
 	}
 }
 

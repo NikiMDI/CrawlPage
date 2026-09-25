@@ -6,18 +6,29 @@ import (
 	"net/url"
 )
 
+type expansionFrame struct {
+	pagePosition int
+	depth        int
+	nextLink     int
+}
+
+type frameChild struct {
+	job           crawlJob
+	alreadyQueued bool
+}
+
 type crawlScheduler struct {
 	inspector *Inspector
 	result    *CrawlResult
 	jobs      chan<- crawlTask
 	results   <-chan crawlWorkerResult
 
-	frontier             *list.List
+	frontier             *list.List // crawlJob or expansionFrame; Back has DFS priority
 	pending              map[string]*list.Element
+	queuedJobs           int
 	completed            map[string]int
 	running              map[string]struct{}
 	unavailable          map[string]struct{}
-	queueSkipped         map[string]struct{}
 	expandedAt           map[string]int
 	sourceSets           map[string]map[string]struct{}
 	countedLinkDocuments map[string]struct{}
@@ -44,7 +55,6 @@ func newCrawlScheduler(
 		completed:            make(map[string]int),
 		running:              make(map[string]struct{}),
 		unavailable:          make(map[string]struct{}),
-		queueSkipped:         make(map[string]struct{}),
 		expandedAt:           make(map[string]int),
 		sourceSets:           make(map[string]map[string]struct{}),
 		countedLinkDocuments: make(map[string]struct{}),
@@ -53,6 +63,7 @@ func newCrawlScheduler(
 	startJob := crawlJob{URL: inspector.startURL, Depth: 0}
 	element := scheduler.frontier.PushBack(startJob)
 	scheduler.pending[inspector.startURL.String()] = element
+	scheduler.queuedJobs = 1
 	scheduler.peakQueueSize = 1
 	return scheduler
 }
@@ -101,15 +112,41 @@ func (s *crawlScheduler) run(ctx context.Context) error {
 func (s *crawlScheduler) nextRunnableJob() (crawlJob, bool) {
 	for s.frontier.Len() > 0 {
 		element := s.frontier.Back()
-		job := element.Value.(crawlJob)
-		s.frontier.Remove(element)
-		key := job.URL.String()
-		delete(s.pending, key)
+		var job crawlJob
+		switch item := element.Value.(type) {
+		case crawlJob:
+			job = item
+			s.frontier.Remove(element)
+			delete(s.pending, job.URL.String())
+			s.queuedJobs--
+		case expansionFrame:
+			s.fillFrame(element)
+			if s.frontier.Back() != element {
+				continue
+			}
+			// Lower-priority siblings may occupy every ready slot. Hand the next
+			// child of this higher-priority frame directly to a free worker.
+			var pendingElement *list.Element
+			var available bool
+			job, pendingElement, available = s.nextFrameJob(element, nil)
+			if !available {
+				continue
+			}
+			if pendingElement != nil {
+				s.frontier.Remove(pendingElement)
+				delete(s.pending, job.URL.String())
+				s.queuedJobs--
+			} else {
+				s.queueLimitReached = true
+			}
+		}
 
+		key := job.URL.String()
 		bestDepth, known := s.result.DepthByURL[key]
-		if !known || bestDepth != job.Depth {
+		if !known || bestDepth > s.inspector.config.MaxDepth {
 			continue
 		}
+		job.Depth = bestDepth
 		if _, blocked := s.unavailable[key]; blocked {
 			continue
 		}
@@ -161,48 +198,88 @@ func (s *crawlScheduler) accept(workerResult crawlWorkerResult) error {
 
 func (s *crawlScheduler) expand(pagePosition int, depth int) {
 	page := s.result.Pages[pagePosition]
-	key := page.URL
-	if previousDepth, expanded := s.expandedAt[key]; expanded && previousDepth <= depth {
+	if previousDepth, expanded := s.expandedAt[page.URL]; expanded && previousDepth <= depth {
 		return
 	}
-	s.expandedAt[key] = depth
+	s.expandedAt[page.URL] = depth
+	if len(page.Links) == 0 {
+		return
+	}
 
-	availableSlots := s.inspector.config.MaxQueue - s.frontier.Len()
-	if availableSlots < 0 {
-		availableSlots = 0
+	frame := s.frontier.PushBack(expansionFrame{pagePosition: pagePosition, depth: depth})
+	s.fillFrame(frame)
+}
+
+// fillFrame stages new jobs within MaxQueue and promotes already queued jobs
+// discovered through this page, preserving DFS order without extra slots.
+func (s *crawlScheduler) fillFrame(element *list.Element) {
+	availableSlots := s.inspector.config.MaxQueue - s.queuedJobs
+	children := make([]frameChild, 0)
+	candidates := make(map[string]struct{})
+	for {
+		job, pendingElement, available := s.nextFrameJob(element, candidates)
+		if !available {
+			break
+		}
+		if pendingElement == nil && availableSlots == 0 {
+			frame := element.Value.(expansionFrame)
+			frame.nextLink--
+			element.Value = frame
+			s.queueLimitReached = true
+			break
+		}
+		candidates[job.URL.String()] = struct{}{}
+		if pendingElement != nil {
+			s.frontier.Remove(pendingElement)
+			delete(s.pending, job.URL.String())
+		} else {
+			availableSlots--
+		}
+		children = append(children, frameChild{job: job, alreadyQueued: pendingElement != nil})
 	}
-	if availableSlots > len(page.Links) {
-		availableSlots = len(page.Links)
+	for index := len(children) - 1; index >= 0; index-- {
+		child := children[index]
+		queued := s.frontier.PushBack(child.job)
+		s.pending[child.job.URL.String()] = queued
+		if !child.alreadyQueued {
+			s.queuedJobs++
+		}
 	}
-	children := make([]crawlJob, 0, availableSlots)
-	candidatePositions := make(map[string]int, availableSlots)
-	for _, discovered := range page.Links {
+	if s.queuedJobs > s.peakQueueSize {
+		s.peakQueueSize = s.queuedJobs
+	}
+}
+
+// nextFrameJob advances one page cursor until it finds a runnable child. All
+// links remain in PageResult.Links, so queue pressure cannot discard a URL.
+func (s *crawlScheduler) nextFrameJob(
+	element *list.Element,
+	candidates map[string]struct{},
+) (crawlJob, *list.Element, bool) {
+	frame := element.Value.(expansionFrame)
+	page := s.result.Pages[frame.pagePosition]
+	for frame.nextLink < len(page.Links) {
+		discovered := page.Links[frame.nextLink]
+		frame.nextLink++
+		element.Value = frame
 		if discovered.Kind != LinkInternal {
 			continue
 		}
 
-		childDepth := depth + 1
-		knownDepth, known := s.result.DepthByURL[discovered.URL]
-		bestDepth := childDepth
-		if known && knownDepth < bestDepth {
-			bestDepth = knownDepth
-		}
-		if !known || childDepth < knownDepth {
-			s.result.DepthByURL[discovered.URL] = childDepth
+		childDepth := frame.depth + 1
+		bestDepth, known := s.result.DepthByURL[discovered.URL]
+		if !known || childDepth < bestDepth {
+			bestDepth = childDepth
+			s.result.DepthByURL[discovered.URL] = bestDepth
 		}
 		childPosition, childDone := s.completed[discovered.URL]
 		if childDone && bestDepth < s.result.Pages[childPosition].Depth {
 			s.result.Pages[childPosition].Depth = bestDepth
 		}
-
 		if bestDepth > s.inspector.config.MaxDepth {
 			continue
 		}
 		if _, blocked := s.unavailable[discovered.URL]; blocked {
-			continue
-		}
-		childURL, err := url.Parse(discovered.URL)
-		if err != nil {
 			continue
 		}
 		if childDone {
@@ -213,39 +290,23 @@ func (s *crawlScheduler) expand(pagePosition int, depth int) {
 		if _, inFlight := s.running[discovered.URL]; inFlight {
 			continue
 		}
+		if _, candidate := candidates[discovered.URL]; candidate {
+			continue
+		}
 		if pendingElement, pending := s.pending[discovered.URL]; pending {
 			pendingJob := pendingElement.Value.(crawlJob)
 			if bestDepth < pendingJob.Depth {
 				pendingJob.Depth = bestDepth
 				pendingElement.Value = pendingJob
 			}
+			return pendingJob, pendingElement, true
+		}
+		childURL, err := url.Parse(discovered.URL)
+		if err != nil {
 			continue
 		}
-		if candidatePosition, candidate := candidatePositions[discovered.URL]; candidate {
-			if bestDepth < children[candidatePosition].Depth {
-				children[candidatePosition].Depth = bestDepth
-			}
-			continue
-		}
-		// Do not block the scheduler here: it must remain able to receive active
-		// worker results. Overflow is explicit in the report, and the URL may be
-		// admitted if another page discovers it after a slot becomes free.
-		if s.frontier.Len()+len(children) >= s.inspector.config.MaxQueue {
-			s.queueLimitReached = true
-			s.queueSkipped[discovered.URL] = struct{}{}
-			continue
-		}
-		delete(s.queueSkipped, discovered.URL)
-		candidatePositions[discovered.URL] = len(children)
-		children = append(children, crawlJob{URL: childURL, Depth: bestDepth})
+		return crawlJob{URL: childURL, Depth: bestDepth}, nil, true
 	}
-
-	for index := len(children) - 1; index >= 0; index-- {
-		job := children[index]
-		element := s.frontier.PushBack(job)
-		s.pending[job.URL.String()] = element
-	}
-	if s.frontier.Len() > s.peakQueueSize {
-		s.peakQueueSize = s.frontier.Len()
-	}
+	s.frontier.Remove(element)
+	return crawlJob{}, nil, false
 }

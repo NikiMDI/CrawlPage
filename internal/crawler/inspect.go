@@ -6,7 +6,6 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
-	"path"
 	"strings"
 	"time"
 )
@@ -49,8 +48,6 @@ type PageResult struct {
 	HTMLParsed             bool
 	RedirectChain          []RedirectHop
 	RedirectedOutsideScope bool
-	RedirectTargetSkipped  bool
-	RedirectSkipReason     string
 	RedirectCycleDetected  bool
 	StoppedByPageLimit     bool
 	LinksDiscovered        int
@@ -77,7 +74,6 @@ type CrawlResult struct {
 	MaxPagesReached   bool
 	PeakQueueSize     int
 	QueueLimitReached bool
-	QueueLinksSkipped int
 }
 
 type Inspector struct {
@@ -185,12 +181,6 @@ func (i *Inspector) inspectURL(
 				result.RedirectedOutsideScope = true
 				return result, pageAccepted, nil
 			}
-			if isPDFURL(nextURL) {
-				result.ResultKind = ResultRedirect
-				result.RedirectTargetSkipped = true
-				result.RedirectSkipReason = "PDF resources are not crawled"
-				return result, pageAccepted, nil
-			}
 			if _, repeated := redirectURLs[nextURL.String()]; repeated {
 				result.ResultKind = ResultRedirectError
 				result.RedirectCycleDetected = true
@@ -248,14 +238,6 @@ func (i *Inspector) inspectURL(
 			kind := LinkExternal
 			if i.scope.contains(linkTarget) {
 				kind = LinkInternal
-				if isPDFURL(linkTarget) {
-					result.Skipped = append(result.Skipped, SkippedLink{
-						SourceURL: currentURL.String(),
-						RawHref:   rawHref,
-						Reason:    "PDF resources are not crawled",
-					})
-					continue
-				}
 			}
 			result.Links = append(result.Links, DiscoveredLink{
 				SourceURL: currentURL.String(),
@@ -267,10 +249,6 @@ func (i *Inspector) inspectURL(
 
 		return result, pageAccepted, nil
 	}
-}
-
-func isPDFURL(target *url.URL) bool {
-	return target != nil && strings.EqualFold(path.Ext(target.Path), ".pdf")
 }
 
 func isHTMLContentType(contentType string) bool {

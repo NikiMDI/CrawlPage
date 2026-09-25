@@ -37,7 +37,7 @@ func TestRunRejectsNonPositiveMaximumQueue(t *testing.T) {
 	}
 }
 
-func TestRunReportsQueueLimitAndOverflow(t *testing.T) {
+func TestRunReportsQueuePressureAndChecksEveryLink(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
 		if r.URL.Path == "/" {
@@ -71,10 +71,13 @@ func TestRunReportsQueueLimitAndOverflow(t *testing.T) {
 		"Maximum queue:      1",
 		"Peak queue:         1",
 		"Queue limit reached: true",
-		"Skipped by queue:   1",
+		"Pages checked:      3",
 	} {
 		if !strings.Contains(stdout.String(), expected) {
 			t.Errorf("report does not contain %q:\n%s", expected, stdout.String())
 		}
+	}
+	if strings.Contains(stdout.String(), "Skipped by queue:") {
+		t.Fatalf("report claims queue pressure skipped links:\n%s", stdout.String())
 	}
 }

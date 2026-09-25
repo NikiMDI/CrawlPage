@@ -132,7 +132,6 @@ func writeReport(output io.Writer, result crawler.CrawlResult) {
 	fmt.Fprintf(output, "Maximum queue:      %d\n", result.MaxQueue)
 	fmt.Fprintf(output, "Peak queue:         %d\n", result.PeakQueueSize)
 	fmt.Fprintf(output, "Queue limit reached: %t\n", result.QueueLimitReached)
-	fmt.Fprintf(output, "Skipped by queue:   %d\n", result.QueueLinksSkipped)
 	fmt.Fprintf(output, "Maximum HTML bytes: %d\n", result.MaxHTMLBytes)
 	fmt.Fprintf(output, "Elapsed:            %s\n", formatElapsed(result.Elapsed))
 	fmt.Fprintf(output, "Max pages reached:  %t\n", result.MaxPagesReached)
@@ -251,14 +250,6 @@ func writeReport(output io.Writer, result crawler.CrawlResult) {
 					"%d. %s — EXTERNAL (not requested)\n",
 					len(page.RedirectChain)+1,
 					page.FinalURL,
-				)
-			case page.RedirectTargetSkipped:
-				fmt.Fprintf(
-					output,
-					"%d. %s — SKIPPED (%s)\n",
-					len(page.RedirectChain)+1,
-					page.FinalURL,
-					page.RedirectSkipReason,
 				)
 			case page.RedirectCycleDetected:
 				fmt.Fprintf(

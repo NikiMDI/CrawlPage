@@ -49,7 +49,6 @@ func (i *Inspector) Crawl(ctx context.Context) (result CrawlResult, err error) {
 		result.PagesChecked, result.MaxPagesReached = session.stats()
 		result.PeakQueueSize = scheduler.peakQueueSize
 		result.QueueLimitReached = scheduler.queueLimitReached
-		result.QueueLinksSkipped = len(scheduler.queueSkipped)
 		sort.SliceStable(result.Pages, func(left, right int) bool {
 			return scheduler.dispatchOrder[result.Pages[left].URL] <
 				scheduler.dispatchOrder[result.Pages[right].URL]
